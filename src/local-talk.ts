@@ -17,9 +17,11 @@ export class LocalTalkSession {
     private settings: () => LMVoiceSettings,
     xaiKey: () => Promise<string>,
     mistralKey: () => Promise<string>,
+    openaiKey: () => Promise<string> = async () => "",
+    googleKey: () => Promise<string> = async () => "",
     private handlers: VoiceHandlers
   ) {
-    this.voice = new VoiceIO(settings, xaiKey, mistralKey);
+    this.voice = new VoiceIO(settings, xaiKey, mistralKey, openaiKey, googleKey);
   }
 
   async start(mic: boolean) {

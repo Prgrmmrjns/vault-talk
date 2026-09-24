@@ -1,9 +1,12 @@
 import { MarkdownRenderChild, Notice, setIcon, type EventRef } from "obsidian";
 import { VaultAgent } from "./agent";
 import { GrokVoiceSession, type VoiceHandlers, type VoicePhase } from "./grok-voice";
+import { GoogleVoiceSession } from "./google-voice";
 import { LocalTalkSession } from "./local-talk";
+import { OpenaiVoiceSession } from "./openai-voice";
+import { isDuplexTalk } from "./providers";
 import type LMVoicePlugin from "./main";
-import { hotkeyLabel } from "./settings";
+import { hotkeyLabel, accentColor } from "./settings";
 
 const PLACE: Record<VoicePhase, string> = {
   idle: "Message Jarvis…",
@@ -24,14 +27,13 @@ export class JarvisPanel {
   private orbBtn!: HTMLButtonElement;
   private waveEl!: HTMLElement;
   private srEl!: HTMLElement;
-  private dictBtn!: HTMLButtonElement;
   private dictKeyBtn!: HTMLButtonElement;
   private chatKeyBtn!: HTMLButtonElement;
   private chatKbd!: HTMLElement;
   private dictKbd!: HTMLElement;
-  private keyHint!: HTMLElement;
   private orbLabel!: HTMLElement;
-  private session: GrokVoiceSession | LocalTalkSession | null = null;
+  private session: GrokVoiceSession | OpenaiVoiceSession | GoogleVoiceSession | LocalTalkSession | null = null;
+  private talkKind = "";
   private agent: VaultAgent;
   private userRows = new Map<string, HTMLElement>();
   private botEl: HTMLElement | null = null;
@@ -49,7 +51,7 @@ export class JarvisPanel {
     opts?: { compact?: boolean }
   ) {
     this.compact = !!opts?.compact;
-    this.agent = new VaultAgent(this.plugin.app, () => this.plugin.settings, () => this.plugin.xaiKey(), () => this.plugin.cursorKey());
+    this.agent = new VaultAgent(this.plugin.app, () => this.plugin.settings, this.plugin.agentKeys());
   }
 
   mount() {
@@ -79,13 +81,13 @@ export class JarvisPanel {
   paintKeys() {
     const chat = hotkeyLabel(this.plugin.settings.dictateHotkey);
     const note = hotkeyLabel(this.plugin.settings.noteHotkey);
+    const accent = this.plugin.settings.accent || "orange";
+    this.rootEl?.setAttr("data-accent", accent);
+    this.rootEl?.style.setProperty("--lm-accent", accentColor(accent));
     this.chatKbd?.setText(chat || "—");
     this.dictKbd?.setText(note || "—");
     this.chatKeyBtn?.setAttribute("aria-label", chat ? `Chat ${chat}` : "Chat");
-    this.dictKeyBtn?.setAttribute("aria-label", note ? `Dictate ${note}` : "Dictate into the note");
-    this.dictBtn?.setAttribute("title", note ? `Dictate into the note (${note})` : "Dictate into the note");
-    const bits = [chat ? `Chat ${chat}` : "", note ? `Dictate ${note}` : ""].filter(Boolean);
-    this.keyHint?.setText(bits.join("  ·  "));
+    this.dictKeyBtn?.setAttribute("aria-label", note ? `Dictation ${note}. Click in the note, then speak.` : "Dictation");
   }
 
   /** Move UI into a new host without killing the voice session. */
@@ -154,14 +156,7 @@ export class JarvisPanel {
 
     const head = root.createDiv({ cls: "vt-j-head" });
     head.createDiv({ cls: "vt-j-k", text: "Jarvis" });
-    this.keyHint = head.createDiv({ cls: "vt-j-hint" });
     const btns = head.createDiv({ cls: "vt-j-hbtns" });
-    this.dictBtn = btns.createEl("button", {
-      cls: "clickable-icon vt-j-dict",
-      attr: { type: "button", "aria-label": "Dictate into the note at the cursor", title: "Dictate into the note at the cursor" },
-    });
-    setIcon(this.dictBtn, "mic");
-    this.dictBtn.addEventListener("click", () => this.plugin.toggleDictate());
     this.iconBtn(btns, "eraser", "Clear", () => this.clear());
     this.iconBtn(btns, "settings", "Settings", () => {
       const setting = (this.plugin.app as unknown as { setting?: { open: () => void; openTabById: (id: string) => void } }).setting;
@@ -197,9 +192,9 @@ export class JarvisPanel {
     });
     this.dictKeyBtn = keys.createEl("button", {
       cls: "vt-j-key vt-j-dict",
-      attr: { type: "button", "aria-label": "Dictate into the note" },
+      attr: { type: "button", "aria-label": "Dictation" },
     });
-    this.dictKeyBtn.createSpan({ text: "Dictate" });
+    this.dictKeyBtn.createSpan({ text: "Dictation" });
     this.dictKbd = this.dictKeyBtn.createEl("kbd");
     this.dictKeyBtn.addEventListener("click", () => this.plugin.toggleDictate());
     this.inputEl = row.createEl("textarea", {
@@ -234,7 +229,7 @@ export class JarvisPanel {
     const d = this.plugin.dictate;
     const on = d.state !== "off";
     const active = d.state === "active";
-    for (const btn of [this.dictBtn, this.dictKeyBtn]) {
+    for (const btn of [this.dictKeyBtn]) {
       if (!btn) continue;
       btn.toggleClass("is-on", on);
       btn.toggleClass("is-active", active);
@@ -386,27 +381,28 @@ export class JarvisPanel {
   }
 
   private async ensure(mic: boolean) {
-    const local = this.plugin.settings.ttsProvider !== "grok";
-    if (this.session && local !== this.session instanceof LocalTalkSession) {
+    const tts = this.plugin.settings.ttsProvider || "grok";
+    const kind = isDuplexTalk(tts) ? tts : "local";
+    if (this.session && this.talkKind !== kind) {
       await this.session.stop();
       this.session = null;
     }
     if (!this.session) {
-      this.session = local
-        ? new LocalTalkSession(
-            this.agent,
-            () => this.plugin.settings,
-            () => this.plugin.xaiKey(),
-            () => this.plugin.mistralKey(),
-            this.handlers()
-          )
-        : new GrokVoiceSession(
-            () => this.plugin.xaiKey(),
-            this.agent,
-            () => this.plugin.settings,
-            this.logDir(),
-            this.handlers()
-          );
+      this.talkKind = kind;
+      const keys = {
+        xai: () => this.plugin.xaiKey(),
+        openai: () => this.plugin.openaiKey(),
+        google: () => this.plugin.googleKey(),
+        mistral: () => this.plugin.mistralKey(),
+      };
+      this.session =
+        kind === "local"
+          ? new LocalTalkSession(this.agent, () => this.plugin.settings, keys.xai, keys.mistral, keys.openai, keys.google, this.handlers())
+          : kind === "openai"
+            ? new OpenaiVoiceSession(keys.openai, this.agent, () => this.plugin.settings, this.logDir(), this.handlers())
+            : kind === "google"
+              ? new GoogleVoiceSession(keys.google, this.agent, () => this.plugin.settings, this.logDir(), this.handlers())
+              : new GrokVoiceSession(keys.xai, this.agent, () => this.plugin.settings, this.logDir(), this.handlers());
     }
     await this.session.start(mic);
   }

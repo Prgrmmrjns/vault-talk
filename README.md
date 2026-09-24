@@ -9,7 +9,7 @@ Desktop only (microphone).
 ## How to use
 
 1. Install the plugin and enable it.
-2. Open **Settings → Vault Talk**. Pick Speech to text (Grok / Whisper / Mistral) and Talk (Grok Voice / Kokoro / Mistral). Add keys or local URLs as needed.
+2. Open **Settings → Vault Talk**. Paste xAI, OpenAI, Google, and/or Anthropic keys. Pick Speech to text, Talk, and Chat (Cursor, OpenAI, Anthropic, Gemini, Mistral, or Ollama).
 3. The desk opens on startup (ribbon **sunrise**, or **Open desk**). Jarvis sits on that view. The ribbon **audio-lines** icon opens chat if the desk is hidden.
 4. **Chat** is Ctrl+X (status bar, or the Chat chip). It opens the conversation. **Dictate** is Ctrl+D — speech is typed into the open note. Escape stops either.
 
@@ -19,7 +19,7 @@ Internet is **off** by default.
 
 ## Privacy
 
-Voice and dictation use the Speech to text / Talk providers you pick (Grok, local Whisper/Kokoro, or Mistral). Optional Cursor / Ollama chat for file-agent fallback stays on those providers. Do not enable writes on vaults you would not trust with the provider you picked.
+Voice and dictation use the Speech to text / Talk providers you pick (Grok, ChatGPT, Google, local Whisper/Kokoro, or Mistral). Chat can use Cursor, OpenAI, Anthropic, Gemini, Mistral, or local Ollama. Do not enable writes on vaults you would not trust with the provider you picked.
 
 ## Commands
 

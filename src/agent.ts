@@ -1,9 +1,17 @@
 import { App, FileSystemAdapter, FileView, MarkdownView, TFile, normalizePath, requestUrl } from "obsidian";
 import { CursorVaultChat } from "./cursor-chat";
-import { chatHeaders, chatRoot, defaultChatModel, parseJson } from "./providers";
+import { ANTHROPIC_API, GEMINI_API, chatRoot, defaultChatModel, parseJson } from "./providers";
 import type { LMVoiceSettings } from "./settings";
 
 export type ChatMsg = { role: "user" | "assistant" | "tool"; content: string; tool_call_id?: string };
+
+export type AgentKeys = {
+  cursor: () => Promise<string>;
+  openai: () => Promise<string>;
+  google: () => Promise<string>;
+  mistral: () => Promise<string>;
+  anthropic: () => Promise<string>;
+};
 
 type ToolCall = { id: string; function: { name: string; arguments: string } };
 
@@ -71,8 +79,7 @@ export class VaultAgent {
   constructor(
     private app: App,
     private settings: () => LMVoiceSettings,
-    private key: () => Promise<string>,
-    private cursorKey: () => Promise<string> = async () => ""
+    private keys: AgentKeys
   ) {}
 
   resetCursor() {
@@ -256,10 +263,19 @@ export class VaultAgent {
       }
     }
     if (s.chatProvider === "cursor") return this.runCursor(history, onTool);
+    if (s.chatProvider === "anthropic") return this.runAnthropic(history, onTool);
+    if (s.chatProvider === "google") return this.runGemini(history, onTool);
     this.resetCursor();
+    return this.runOpenAI(history, onTool);
+  }
+
+  private async runOpenAI(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
+    const s = this.settings();
     const model = s.llmModel || defaultChatModel(s.chatProvider);
     if (!model) throw new Error("Pick a chat model in settings.");
-    const headers = chatHeaders(s);
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (s.chatProvider === "openai") headers.Authorization = "Bearer " + (await this.keys.openai());
+    if (s.chatProvider === "mistral") headers.Authorization = "Bearer " + (await this.keys.mistral());
     const messages: Record<string, unknown>[] = [{ role: "system", content: await this.systemText() }, ...history];
     const tools = this.tools();
     let spoken = "";
@@ -305,9 +321,132 @@ export class VaultAgent {
     return spoken.trim();
   }
 
+  private async runAnthropic(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
+    const s = this.settings();
+    const model = s.llmModel || defaultChatModel("anthropic");
+    const key = await this.keys.anthropic();
+    const tools = this.tools().map((t) => ({
+      name: t.function.name,
+      description: t.function.description,
+      input_schema: t.function.parameters,
+    }));
+    const messages: Record<string, unknown>[] = history
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content }));
+    let spoken = "";
+    for (let hop = 0; hop < 8; hop++) {
+      const res = await requestUrl({
+        url: `${ANTHROPIC_API}/messages`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 1024,
+          temperature: 0.3,
+          system: await this.systemText(),
+          messages,
+          tools: tools.length ? tools : undefined,
+        }),
+        throw: false,
+      });
+      if (res.status >= 300) throw new Error(`LLM ${res.status}: ${(res.text || "").slice(0, 200)}`);
+      const json = parseJson(res);
+      const content = Array.isArray(json.content) ? json.content : [];
+      const uses: { id: string; name: string; input: unknown }[] = [];
+      let text = "";
+      for (const raw of content) {
+        if (!raw || typeof raw !== "object") continue;
+        const p = raw as { type?: string; text?: string; id?: string; name?: string; input?: unknown };
+        if (p.type === "text") text += p.text || "";
+        if (p.type === "tool_use") uses.push({ id: String(p.id || ""), name: String(p.name || ""), input: p.input });
+      }
+      if (!uses.length) {
+        spoken = text || spoken;
+        break;
+      }
+      messages.push({ role: "assistant", content });
+      const results: Record<string, unknown>[] = [];
+      for (const u of uses) {
+        const result = await this.exec(
+          { id: u.id, function: { name: u.name, arguments: JSON.stringify(u.input ?? {}) } },
+          onTool
+        );
+        results.push({ type: "tool_result", tool_use_id: u.id, content: result });
+      }
+      messages.push({ role: "user", content: results });
+    }
+    return spoken.trim();
+  }
+
+  private async runGemini(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
+    const s = this.settings();
+    const model = s.llmModel || defaultChatModel("google");
+    const key = await this.keys.google();
+    const decls = this.grokTools().map((t) => ({
+      name: t.name,
+      description: t.description,
+      parameters: t.parameters,
+    }));
+    const contents: Record<string, unknown>[] = history
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      }));
+    let spoken = "";
+    for (let hop = 0; hop < 8; hop++) {
+      const res = await requestUrl({
+        url: `${GEMINI_API}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: await this.systemText() }] },
+          contents,
+          generationConfig: { temperature: 0.3 },
+          tools: decls.length ? [{ functionDeclarations: decls }] : undefined,
+        }),
+        throw: false,
+      });
+      if (res.status >= 300) throw new Error(`LLM ${res.status}: ${(res.text || "").slice(0, 200)}`);
+      const json = parseJson(res);
+      const cands = json.candidates;
+      const first = Array.isArray(cands) ? cands[0] : null;
+      const parts =
+        first && typeof first === "object" && "content" in first
+          ? ((first as { content?: { parts?: Record<string, unknown>[] } }).content?.parts || [])
+          : [];
+      const calls: { name: string; args: unknown }[] = [];
+      let text = "";
+      for (const p of parts) {
+        if (typeof p.text === "string") text += p.text;
+        const fc = p.functionCall as { name?: string; args?: unknown } | undefined;
+        if (fc?.name) calls.push({ name: fc.name, args: fc.args });
+      }
+      contents.push({ role: "model", parts });
+      if (!calls.length) {
+        spoken = text || spoken;
+        break;
+      }
+      const responses: Record<string, unknown>[] = [];
+      for (const c of calls) {
+        const result = await this.exec(
+          { id: c.name, function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) } },
+          onTool
+        );
+        responses.push({ functionResponse: { name: c.name, response: { result } } });
+      }
+      contents.push({ role: "user", parts: responses });
+    }
+    return spoken.trim();
+  }
+
   private async runCursor(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
     if (!this.cursor) {
-      this.cursor = new CursorVaultChat(this.app, this.cursorKey, this.settings);
+      this.cursor = new CursorVaultChat(this.app, this.keys.cursor, this.settings);
     }
     const last = [...history].reverse().find((m) => m.role === "user");
     if (!last) return "";

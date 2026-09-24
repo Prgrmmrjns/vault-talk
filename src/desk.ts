@@ -301,24 +301,17 @@ class DeskView extends ItemView {
     this.page = scroll.createDiv("desk-page");
     this.heroEl = this.page.createDiv("desk-hero");
     this.goalEl = this.page.createDiv("desk-goal");
-    const ai = this.page.createDiv("desk-ai");
-    this.jarvisHost = ai.createDiv("desk-jarvis");
-    this.chipsEl = ai.createDiv("desk-chips");
     const grid = this.page.createDiv("desk-grid");
     this.dayEl = grid.createDiv("desk-card desk-day");
-    const side = grid.createDiv("desk-side");
-    this.tasksEl = side.createDiv("desk-card desk-tasks");
-    this.projectsEl = side.createDiv("desk-card desk-projects");
-    this.reflectEl = this.page.createDiv("desk-card desk-reflect");
-    this.plugin.jarvis()?.mountEmbed?.(this.jarvisHost);
+    this.tasksEl = grid.createDiv("desk-card desk-tasks");
+    this.projectsEl = grid.createDiv("desk-card desk-projects");
     this.registerDomEvent(document, "pointerdown", (e) => { if (this.pop && !this.pop.contains(e.target)) this.closePop(); });
     this.registerDomEvent(document, "keydown", (e) => { if (e.key === "Escape") this.closePop(); });
-    this.plugin.registerInterval(window.setInterval(() => this.tick(), 30000));
+    this.registerInterval(window.setInterval(() => this.tick(), 30000));
     await this.refresh();
   }
 
   async onClose() {
-    this.plugin.jarvis()?.releaseEmbed?.(this.jarvisHost);
     this.closePop();
   }
 
@@ -343,11 +336,9 @@ class DeskView extends ItemView {
     this.page.toggleClass("is-unplanned", !d.daily.goal && !d.daily.blocks.length);
     this.renderHero();
     this.renderGoal();
-    this.renderChips(evening);
     this.renderDay();
     this.renderTasks();
     this.renderProjects();
-    this.renderReflect();
   }
 
   tick() {
@@ -418,15 +409,10 @@ class DeskView extends ItemView {
       head.createSpan({ cls: "desk-now-when", text: inMin < 60 ? `in ${inMin} min` : `at ${fmt(next.start)}` });
       el.createDiv({ cls: "desk-now-title", text: clean(next.text || next.title) });
       el.createDiv({ cls: "desk-now-sub", text: `${fmt(next.start)} – ${fmt(next.end)} · free until then` });
-      const row = el.createDiv("desk-now-acts");
-      btn(row, "compass", "What now?", () => this.plugin.aiNext());
     } else {
       const any = this.data.daily.blocks.length;
       head.createSpan({ text: any ? "Clear" : "Open day" });
       el.createDiv({ cls: "desk-now-title", text: any ? "Nothing left on the plan." : "No plan yet." });
-      const row = el.createDiv("desk-now-acts");
-      if (new Date().getHours() >= this.plugin.settings.reflectHour) btn(row, "moon", "Reflect", () => this.plugin.aiReflect(), "is-solid");
-      else btn(row, "sparkles", "Plan my day", () => this.plugin.aiPlan(), "is-solid");
     }
   }
 
@@ -434,7 +420,6 @@ class DeskView extends ItemView {
 
   renderGoal() {
     const el = this.goalEl;
-    if (this.planning) { this.renderPlanGuide(); return; }
     if (el.contains(document.activeElement)) return;
     el.empty();
     el.createDiv({ cls: "desk-label", text: "Today's goal" });
@@ -443,17 +428,6 @@ class DeskView extends ItemView {
     autogrow(ta);
     ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } });
     ta.addEventListener("blur", () => { const v = ta.value.replace(/\s+/g, " ").trim(); if (v !== this.data.daily.goal) this.plugin.setGoal(v); });
-  }
-
-  renderChips(evening) {
-    const el = this.chipsEl;
-    el.empty();
-    const unplanned = !this.data.daily.blocks.length;
-    btn(el, "sparkles", "Plan my day", () => this.plugin.aiPlan(), unplanned && !evening ? "is-chip is-primary" : "is-chip");
-    btn(el, "compass", "What now?", () => this.plugin.aiNext(), "is-chip");
-    btn(el, "calendar-clock", "Replan rest of day", () => this.plugin.aiReplan(), "is-chip");
-    btn(el, "moon", "Reflect", () => this.plugin.aiReflect(), evening ? "is-chip is-primary" : "is-chip");
-    if (!this.plugin.jarvis()) el.createSpan({ cls: "desk-muted", text: "Enable Vault Talk for Jarvis." });
   }
 
   /* ---------- timeline ---------- */
@@ -669,7 +643,6 @@ class DeskView extends ItemView {
     }
     const foot = pop.createDiv("desk-pop-foot");
     btn(foot, "trash-2", "Delete", () => { this.closePop(); this.plugin.deleteBlock(it); }, "is-ghost");
-    btn(foot, "sparkles", "Coach me", () => { this.closePop(); this.plugin.aiFocus(clean(it.text)); });
     btn(foot, it.done ? "rotate-ccw" : "check", it.done ? "Reopen" : "Done", () => { this.closePop(); this.plugin.toggleBlock(it); }, "is-solid");
   }
 
@@ -677,8 +650,6 @@ class DeskView extends ItemView {
     const pop = this.openPop(anchor);
     pop.createDiv({ cls: "desk-pop-title", text: ev.title });
     pop.createDiv({ cls: "desk-pop-sub", text: `${fmt(ev.start)} – ${fmt(ev.end)}${ev.location ? " · " + ev.location : ""}` });
-    const foot = pop.createDiv("desk-pop-foot");
-    btn(foot, "sparkles", "Prep with Jarvis", () => { this.closePop(); this.plugin.aiFocus(`prepare for "${ev.title}" at ${fmt(ev.start)}`); }, "is-solid");
   }
 
   /* ---------- tasks ---------- */
@@ -734,18 +705,8 @@ class DeskView extends ItemView {
   renderDuties() {
     const d = this.data;
     const stale = d.projects.filter((p) => !p.updatedThisWeek).sort((a, b) => (a.lastLog || "").localeCompare(b.lastLog || ""));
-    const needPlan = !d.daily.goal;
-    if (!needPlan && !stale.length) return;
-    const box = this.tasksEl.createDiv("desk-duties");
-    if (needPlan) {
-      const row = box.createDiv("desk-duty is-plan");
-      row.createDiv({ cls: "desk-duty-kicker", text: "First" });
-      const body = row.createDiv("desk-duty-body");
-      body.createDiv({ cls: "desk-duty-title", text: "Plan today" });
-      body.createDiv({ cls: "desk-duty-sub", text: "One outcome, then the blocks already on the day." });
-      btn(row, "pencil", "Fill in", () => this.startPlan(), "is-solid");
-    }
     if (!stale.length) return;
+    const box = this.tasksEl.createDiv("desk-duties");
     box.createDiv({ cls: "desk-label", text: "This week · project update" });
     for (const p of stale) {
       const row = box.createDiv("desk-duty");
@@ -756,54 +717,6 @@ class DeskView extends ItemView {
       btn(row, "arrow-up-right", "Open", () => this.plugin.openProject(p.file), "is-soft");
       row.addEventListener("click", () => this.plugin.openProject(p.file));
     }
-  }
-
-  startPlan() {
-    this.planning = true;
-    this.renderGoal();
-    this.goalEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }
-
-  renderPlanGuide() {
-    const el = this.goalEl;
-    if (el.contains(document.activeElement)) return;
-    el.empty();
-    el.addClass("is-guiding");
-    el.createDiv({ cls: "desk-label", text: "Plan today" });
-    el.createDiv({ cls: "desk-guide-q", text: "What is the one outcome for today?" });
-    const ta = el.createEl("textarea", { cls: "desk-goal-input", attr: { rows: 2, placeholder: "One sentence. Concrete.", spellcheck: "false" } });
-    ta.value = this.draftGoal ?? this.data.daily.goal;
-    autogrow(ta);
-    ta.addEventListener("input", () => { this.draftGoal = ta.value; });
-    const blocks = this.data.daily.blocks;
-    if (blocks.length) {
-      const list = el.createDiv("desk-guide-day");
-      list.createDiv({ cls: "desk-label", text: "Already on the day" });
-      for (const b of blocks) {
-        list.createDiv({ cls: "desk-guide-line" + (b.done ? " is-done" : ""), text: `${fmt(b.start)} – ${fmt(b.end)}  ${clean(b.text)}` });
-      }
-    }
-    const add = el.createDiv("desk-guide-add");
-    add.createDiv({ cls: "desk-label", text: "Add one block, if it belongs" });
-    const times = add.createDiv("desk-guide-times");
-    const start = times.createEl("input", { cls: "desk-input", attr: { type: "time" } });
-    const end = times.createEl("input", { cls: "desk-input", attr: { type: "time" } });
-    const slot = this.plugin.freeSlot(60);
-    start.value = fmt(slot);
-    end.value = fmt(Math.min(slot + 60, 22 * 60));
-    const what = add.createEl("input", { cls: "desk-input", attr: { type: "text", placeholder: "Leave empty to keep the day as it is" } });
-    const foot = el.createDiv("desk-guide-foot");
-    btn(foot, "x", "Close", () => { this.planning = false; this.draftGoal = null; this.renderGoal(); }, "is-ghost");
-    btn(foot, "check", "Save plan", async () => {
-      const goal = ta.value.replace(/\s+/g, " ").trim();
-      if (!goal) { ta.focus(); return; }
-      this.planning = false;
-      this.draftGoal = null;
-      await this.plugin.setGoal(goal);
-      const text = what.value.trim();
-      if (text && start.value && end.value) await this.plugin.addBlock(toMin(start.value), toMin(end.value), text);
-    }, "is-solid");
-    setTimeout(() => ta.focus(), 30);
   }
 
   taskRow(parent, t, key) {
@@ -830,7 +743,6 @@ class DeskView extends ItemView {
     if (!t.isToday) meta.createSpan({ cls: "desk-src", text: t.file.basename });
     const acts = row.createDiv("desk-task-acts");
     btn(acts, "calendar-plus", "Schedule next free hour", () => this.plugin.scheduleTask(t, this.plugin.freeSlot(60), 60), "is-icon");
-    btn(acts, "sparkles", "Break down with Jarvis", () => this.plugin.aiBreakdown(t), "is-icon");
     btn(acts, "arrow-up-right", "Open", () => this.plugin.openAt(t.file, t.line), "is-icon");
   }
 
@@ -867,36 +779,7 @@ class DeskView extends ItemView {
     }
   }
 
-  /* ---------- reflection ---------- */
-
-  renderReflect() {
-    const el = this.reflectEl, d = this.data;
-    if (el.contains(document.activeElement)) return;
-    el.empty();
-    const head = el.createDiv("desk-card-head");
-    head.createDiv({ cls: "desk-card-title", text: "Reflection" });
-    const blocks = d.daily.blocks;
-    const doneB = blocks.filter((b) => b.done);
-    const stats = head.createDiv("desk-stats");
-    stats.createSpan({ cls: "desk-pill", text: `blocks ${doneB.length}/${blocks.length}` });
-    stats.createSpan({ cls: "desk-pill", text: `focus ${dur(doneB.reduce((a, b) => a + b.end - b.start, 0))}` });
-    stats.createSpan({ cls: "desk-pill", text: `tasks ✓ ${d.doneToday}` });
-    btn(head, "sparkles", "Draft with Jarvis", () => this.plugin.aiReflect(), "is-soft");
-    const cols = el.createDiv("desk-reflect-cols");
-    for (const [key, label, ph] of [
-      ["moved", "What moved the goal?", "The one thing that actually happened…"],
-      ["carries", "What carries to tomorrow?", "Unfinished, and why…"],
-    ]) {
-      const f = cols.createDiv("desk-field");
-      f.createDiv({ cls: "desk-label", text: label });
-      const ta = f.createEl("textarea", { cls: "desk-textarea", attr: { rows: 2, placeholder: ph } });
-      ta.value = d.daily[key];
-      autogrow(ta);
-      ta.addEventListener("blur", () => { const v = ta.value.replace(/\s+/g, " ").trim(); if (v !== d.daily[key]) this.plugin.setReflection(key, v); });
-    }
-    if (d.yesterdayCarries) el.createDiv({ cls: "desk-hint", text: `Yesterday carried: ${d.yesterdayCarries}` });
   }
-}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -914,8 +797,6 @@ export class Desk {
     this.plugin.registerView(VIEW_TYPE, (leaf) => new DeskView(leaf, this));
     this.plugin.addRibbonIcon("sunrise", "Open desk", () => this.openDesk());
     this.plugin.addCommand({ id: "open-desk", name: "Open desk", callback: () => this.openDesk() });
-    this.plugin.addCommand({ id: "plan-day", name: "Plan my day with Jarvis", callback: () => this.aiPlan() });
-    this.plugin.addCommand({ id: "reflect-day", name: "Reflect with Jarvis", callback: () => this.aiReflect() });
 
     const bump = () => { window.clearTimeout(this.t); this.t = window.setTimeout(() => this.views().forEach((v) => v.refresh()), 500); };
     this.plugin.registerEvent(this.app.metadataCache.on("changed", bump));
@@ -924,7 +805,7 @@ export class Desk {
     this.plugin.registerInterval(window.setInterval(() => this.remind(), 20000));
 
     this.app.workspace.onLayoutReady(async () => {
-      if (this.settings.openOnStartup) await this.openDesk(true);
+      await this.openDesk(true);
       this.remind();
     });
   }
@@ -1147,7 +1028,6 @@ export class Desk {
   async focusProject(p) {
     const start = Math.ceil(nowMin() / 5) * 5;
     await this.addBlock(start, start + 45, `${p.now ? p.now.replace(/\s*[—–-]\s*$/, "") : p.title} #${p.slug}`);
-    this.aiFocus(`${p.title}${p.now ? " — now step: " + p.now : ""}`);
   }
 
   async quickAdd(raw, target) {
@@ -1187,14 +1067,33 @@ export class Desk {
     this.latestAt = 0;
   }
 
+  async ensureReflection(file, today, scan) {
+    const named = (s) => clean(s).toLowerCase() === "reflection";
+    if (scan.open.some((t) => named(t.body)) || scan.doneList.some((s) => s.toLowerCase() === "reflection")) return false;
+    const line = `- [ ] Reflection 🔁 every day 📅 ${today}`;
+    await this.edit(file, (text) => {
+      if (/^- \[[ xX]\] Reflection\b/m.test(text)) return text;
+      const r = section(text, "Reflection");
+      if (r) return text.slice(0, r.end).replace(/\s*$/, "\n") + line + "\n" + text.slice(r.end);
+      return text.replace(/\s*$/, `\n\n# Reflection\n\n${line}\n`);
+    });
+    return true;
+  }
+
   /* ---------- data ---------- */
 
   async collect() {
     const day = M();
     const today = day.format(ISO);
     const file = await this.ensureDaily(day);
+    let scan = await this.scanTasks(today, file.path);
+    if (!(await this.ensureReflection(file, today, scan))) {
+      /* already on the list */
+    } else {
+      scan = await this.scanTasks(today, file.path);
+    }
     const daily = parseDaily(await this.app.vault.cachedRead(file));
-    const [events, scan] = await Promise.all([this.loadEvents(day), this.scanTasks(today, file.path)]);
+    const events = await this.loadEvents(day);
     const planned = new Set(daily.blocks.map((b) => norm(b.text)));
     const cutoff = day.clone().subtract(3, "days").format(ISO);
     const week = day.clone().add(7, "days").format(ISO);

@@ -8,6 +8,7 @@ import {
 } from "./providers";
 import type { LMVoiceSettings } from "./settings";
 import { type LiveHandlers } from "./stt-stream";
+import { b64enc } from "./voice-pcm";
 
 type RecLike = {
   lang: string;
@@ -118,7 +119,9 @@ export class VoiceIO {
   constructor(
     private settings: () => LMVoiceSettings,
     private key: () => Promise<string>,
-    private mistralKey: () => Promise<string> = async () => ""
+    private mistralKey: () => Promise<string> = async () => "",
+    private openaiKey: () => Promise<string> = async () => "",
+    private googleKey: () => Promise<string> = async () => ""
   ) {}
 
   cancelSpeak() {
@@ -436,6 +439,8 @@ export class VoiceIO {
     const kind = this.settings().sttProvider;
     if (kind === "whisper") return this.transcribeWhisper(bytes, filename, mime);
     if (kind === "mistral") return this.transcribeMistral(bytes, filename, mime);
+    if (kind === "openai") return this.transcribeOpenai(bytes, filename, mime);
+    if (kind === "google") return this.transcribeGoogle(bytes, filename, mime);
     return this.transcribeGrok(bytes, filename, mime);
   }
 
@@ -459,6 +464,48 @@ export class VoiceIO {
       mime,
       { Authorization: "Bearer " + (await this.mistralKey()) }
     );
+  }
+
+  private async transcribeOpenai(bytes: Uint8Array, filename: string, mime: string): Promise<string> {
+    return this.postStt(
+      "https://api.openai.com/v1/audio/transcriptions",
+      { model: "whisper-1", language: "en" },
+      bytes,
+      filename,
+      mime,
+      { Authorization: "Bearer " + (await this.openaiKey()) }
+    );
+  }
+
+  private async transcribeGoogle(bytes: Uint8Array, filename: string, mime: string): Promise<string> {
+    const key = await this.googleKey();
+    const res = await requestUrl({
+      url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: "Transcribe this speech. Return only the transcript." },
+              { inline_data: { mime_type: mime || "audio/webm", data: b64enc(bytes) } },
+            ],
+          },
+        ],
+      }),
+      throw: false,
+    });
+    if (res.status >= 300) throw new Error(`STT ${res.status}: ${(res.text || "").slice(0, 180)}`);
+    const json = parseJson(res);
+    const cands = json.candidates;
+    const first = Array.isArray(cands) ? cands[0] : null;
+    const parts =
+      first && typeof first === "object" && "content" in first
+        ? (first as { content?: { parts?: { text?: string }[] } }).content?.parts
+        : [];
+    const text = (parts || []).map((p) => p.text || "").join("").trim();
+    if (!text) throw new Error("Empty transcript");
+    return text;
   }
 
   private async postStt(

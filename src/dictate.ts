@@ -1,4 +1,4 @@
-import { MarkdownView, Notice, TFile, type Editor, type EditorPosition } from "obsidian";
+import { MarkdownView, Notice, type Editor, type EditorPosition } from "obsidian";
 import type LMVoicePlugin from "./main";
 import { VoiceIO } from "./audio";
 import { hotkeyLabel } from "./settings";
@@ -24,7 +24,9 @@ export class EditorDictate {
     this.voice = new VoiceIO(
       () => plugin.settings,
       () => plugin.xaiKey(),
-      () => plugin.mistralKey()
+      () => plugin.mistralKey(),
+      () => plugin.openaiKey(),
+      () => plugin.googleKey()
     );
   }
 
@@ -38,10 +40,11 @@ export class EditorDictate {
   }
 
   remember(view: MarkdownView) {
-    if (this.state === "off") this.view = view;
+    if (this.state === "off" || !this.written) this.view = view;
   }
 
   cancel() {
+    this.unplace();
     this.voice.cancelListen();
   }
 
@@ -55,12 +58,8 @@ export class EditorDictate {
   }
 
   private async start() {
-    const view = await this.focusNote();
-    if (!view) {
-      new Notice("Open a note to dictate.");
-      return;
-    }
-    this.view = view;
+    const open = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+    if (open?.file) this.view = open;
     this.busy = true;
     this.text = "";
     this.from = null;
@@ -70,8 +69,9 @@ export class EditorDictate {
     this.levels.fill(0);
     this.errShown = false;
     this.setState("on");
+    this.watchPlace();
     const keys = hotkeyLabel(this.plugin.settings.noteHotkey);
-    new Notice(keys ? `Dictating into the note · ${keys} or Esc stops` : "Dictating into the note · Esc stops");
+    new Notice(keys ? `Dictation on · click in the note · ${keys} or Esc stops` : "Dictation on · click in the note · Esc stops");
     void this.voice
       .listenLive({
         onText: (full) => {
@@ -109,6 +109,7 @@ export class EditorDictate {
         new Notice(msg);
       })
       .finally(() => {
+        this.unplace();
         this.busy = false;
         this.from = null;
         this.written = 0;
@@ -117,26 +118,33 @@ export class EditorDictate {
       });
   }
 
-  private async focusNote(): Promise<MarkdownView | null> {
-    const app = this.plugin.app;
-    const cur = app.workspace.getActiveViewOfType(MarkdownView);
-    if (cur?.file) return cur;
-    const leaves = app.workspace.getLeavesOfType("markdown");
-    for (let i = leaves.length - 1; i >= 0; i--) {
-      const leaf = leaves[i];
-      if (leaf?.view instanceof MarkdownView && leaf.view.file) {
-        await app.workspace.revealLeaf(leaf);
-        return leaf.view;
-      }
-    }
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, "0");
-    const path = `Journal/${d.getFullYear()}-${p(d.getMonth() + 1)}/${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()}.md`;
-    const file = app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) return null;
-    const leaf = app.workspace.getLeaf("tab");
-    await leaf.openFile(file);
-    return leaf.view instanceof MarkdownView ? leaf.view : null;
+  private placeOff: (() => void) | null = null;
+
+  private watchPlace() {
+    this.unplace();
+    const aim = () => {
+      if (this.written) return;
+      const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+      if (!view?.file) return;
+      this.view = view;
+      this.from = null;
+    };
+    const click = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t?.closest?.(".cm-editor, .markdown-source-view, .markdown-preview-view")) return;
+      window.setTimeout(aim, 0);
+    };
+    document.addEventListener("mousedown", click, true);
+    const ref = this.plugin.app.workspace.on("active-leaf-change", aim);
+    this.placeOff = () => {
+      document.removeEventListener("mousedown", click, true);
+      this.plugin.app.workspace.offref(ref);
+      this.placeOff = null;
+    };
+  }
+
+  private unplace() {
+    this.placeOff?.();
   }
 
   private noteView(): MarkdownView | null {
@@ -160,8 +168,16 @@ export class EditorDictate {
   }
 
   private paintEditor() {
+    if (!this.view?.file) this.view = this.noteView();
     const ed = this.editor();
     if (!ed || !this.text) return;
+    if (!this.view?.file) {
+      if (!this.errShown) {
+        this.errShown = true;
+        new Notice("Click in the open note.");
+      }
+      return;
+    }
     if (!this.from) {
       const pos = ed.getCursor();
       const before = pos.ch > 0 ? ed.getLine(pos.line).slice(pos.ch - 1, pos.ch) : "";

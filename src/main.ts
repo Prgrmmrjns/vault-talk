@@ -3,9 +3,8 @@ import { Desk } from "./desk";
 import { EditorDictate } from "./dictate";
 import { DictateView, DICTATE_VIEW } from "./dictate-view";
 import { JarvisEmbed, JarvisPanel } from "./jarvis-panel";
-import { DEFAULT_SETTINGS, LMVoiceSettingTab, ACCENTS, DEFAULT_DICTATE_HOTKEY, DEFAULT_NOTE_HOTKEY, hotkeyLabel, matchesHotkey, type LMVoiceSettings } from "./settings";
-import { CHAT_PROVIDERS, STT_PROVIDERS, TTS_PROVIDERS, defaultChatModel } from "./providers";
-import { CURSOR_MODELS } from "./voices";
+import { DEFAULT_SETTINGS, LMVoiceSettingTab, ACCENTS, accentColor, DEFAULT_DICTATE_HOTKEY, DEFAULT_NOTE_HOTKEY, hotkeyLabel, matchesHotkey, type LMVoiceSettings } from "./settings";
+import { CHAT_PROVIDERS, STT_PROVIDERS, TTS_PROVIDERS, chatModels, defaultChatModel } from "./providers";
 
 export default class LMVoicePlugin extends Plugin {
   settings: LMVoiceSettings = DEFAULT_SETTINGS;
@@ -117,12 +116,8 @@ export default class LMVoicePlugin extends Plugin {
 
   /** Public: send a prompt to Jarvis; `display` is what the chat log shows. */
   async askJarvis(display: string, prompt = display) {
-    let panel = this.embedHost ? this.embedPanel : this.sidePanel;
-    if (!panel) {
-      await this.activateDictate(false);
-      panel = this.embedHost ? this.embedPanel : this.sidePanel;
-    }
-    await panel?.ask(display, prompt);
+    if (!this.sidePanel) await this.openSide(false);
+    await this.sidePanel?.ask(display, prompt);
   }
 
   toggleDictate() {
@@ -132,12 +127,6 @@ export default class LMVoicePlugin extends Plugin {
   /** Show the conversation, then start or stop voice. */
   async openChat() {
     if (this.dictate.listening) this.dictate.cancel();
-    if (this.embedPanel && this.embedHost && this.shown(this.embedHost)) {
-      this.revealHost(this.embedHost);
-      this.embedPanel.showLog();
-      await this.embedPanel.toggleVoice();
-      return;
-    }
     await this.openSide(true);
     const view = this.sideView();
     view?.showLog();
@@ -150,12 +139,6 @@ export default class LMVoicePlugin extends Plugin {
 
   /** Prefer the on-screen desk embed; otherwise the sidebar chat. */
   async activateDictate(focus = true) {
-    if (this.embedPanel && this.embedHost && this.shown(this.embedHost)) {
-      this.revealHost(this.embedHost);
-      this.embedPanel.showLog();
-      if (focus) this.embedPanel.focusInput();
-      return;
-    }
     await this.openSide(focus);
     this.sideView()?.showLog();
   }
@@ -201,18 +184,6 @@ export default class LMVoicePlugin extends Plugin {
     return view instanceof DictateView ? view : null;
   }
 
-  private shown(el: HTMLElement) {
-    const r = el.getBoundingClientRect();
-    return r.width > 8 && r.height > 8;
-  }
-
-  private revealHost(el: HTMLElement) {
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      if (leaf.view.containerEl.contains(el)) void this.app.workspace.revealLeaf(leaf);
-    });
-    el.scrollIntoView({ block: "nearest" });
-  }
-
   private statusChat!: HTMLButtonElement;
   private statusDict!: HTMLButtonElement;
 
@@ -229,11 +200,15 @@ export default class LMVoicePlugin extends Plugin {
   refreshChrome() {
     const chat = hotkeyLabel(this.settings.dictateHotkey);
     const note = hotkeyLabel(this.settings.noteHotkey);
-    this.statusChat?.setText(chat ? `Chat ${chat}` : "Chat");
-    this.statusChat?.setAttribute("aria-label", "Open chat");
-    this.statusDict?.setText(note ? `Dictate ${note}` : "Dictate");
-    this.statusDict?.setAttribute("aria-label", "Dictate into the note");
+    const color = accentColor(this.settings.accent);
+    this.statusChat?.style.setProperty("--vt-accent", color);
+    this.statusDict?.style.setProperty("--vt-accent", color);
+    this.statusChat?.setText(chat ? `Chat  ${chat}` : "Chat");
+    this.statusChat?.setAttribute("aria-label", chat ? `Chat ${chat}` : "Chat");
+    this.statusDict?.setText(note ? `Dictation  ${note}` : "Dictation");
+    this.statusDict?.setAttribute("aria-label", note ? `Dictation ${note}` : "Dictation");
     this.statusDict?.toggleClass("is-on", this.dictate?.listening ?? false);
+    this.statusChat?.toggleClass("is-on", false);
     this.embedPanel?.paintKeys();
     this.sidePanel?.paintKeys();
   }
@@ -262,15 +237,52 @@ export default class LMVoicePlugin extends Plugin {
     throw new Error("Add your Cursor API key in plugin settings.");
   }
 
-  async mistralKey(): Promise<string> {
-    if (this.settings.mistralApiKey) return this.settings.mistralApiKey;
+  agentKeys() {
+    return {
+      cursor: () => this.cursorKey(),
+      openai: () => this.openaiKey(),
+      google: () => this.googleKey(),
+      mistral: () => this.mistralKey(),
+      anthropic: () => this.anthropicKey(),
+    };
+  }
+
+  async openaiKey(): Promise<string> {
+    if (this.settings.openaiApiKey) return this.settings.openaiApiKey;
+    const v = await this.envValue("OPENAI_API_KEY");
+    if (v) return v;
+    throw new Error("Add your OpenAI API key in plugin settings.");
+  }
+
+  async googleKey(): Promise<string> {
+    if (this.settings.googleApiKey) return this.settings.googleApiKey;
+    const v = (await this.envValue("GOOGLE_API_KEY")) || (await this.envValue("GEMINI_API_KEY"));
+    if (v) return v;
+    throw new Error("Add your Google API key in plugin settings.");
+  }
+
+  async anthropicKey(): Promise<string> {
+    if (this.settings.anthropicApiKey) return this.settings.anthropicApiKey;
+    const v = await this.envValue("ANTHROPIC_API_KEY");
+    if (v) return v;
+    throw new Error("Add your Anthropic API key in plugin settings.");
+  }
+
+  private async envValue(name: string): Promise<string> {
     try {
       const env = await this.app.vault.adapter.read(".env");
-      const m = env.match(/^MISTRAL_API_KEY\s*=\s*["']?([^"'\r\n]+)/m);
+      const m = env.match(new RegExp(`^${name}\\s*=\\s*["']?([^"'\\r\\n]+)`, "m"));
       if (m?.[1]) return m[1].trim();
     } catch {
       /* missing */
     }
+    return "";
+  }
+
+  async mistralKey(): Promise<string> {
+    if (this.settings.mistralApiKey) return this.settings.mistralApiKey;
+    const v = await this.envValue("MISTRAL_API_KEY");
+    if (v) return v;
     throw new Error("Add your Mistral API key in plugin settings.");
   }
 
@@ -311,8 +323,9 @@ export default class LMVoicePlugin extends Plugin {
     if (!TTS_PROVIDERS.some((p) => p.id === this.settings.ttsProvider) || this.settings.ttsProvider === ("browser" as string)) {
       this.settings.ttsProvider = "grok";
     }
-    if (this.settings.chatProvider === "cursor" && !CURSOR_MODELS.some((m) => m.id === this.settings.llmModel)) {
-      this.settings.llmModel = defaultChatModel("cursor");
+    const models = chatModels(this.settings.chatProvider);
+    if (models.length && !models.some((m) => m.id === this.settings.llmModel)) {
+      this.settings.llmModel = defaultChatModel(this.settings.chatProvider);
     }
     const stale = [
       "allowTools",

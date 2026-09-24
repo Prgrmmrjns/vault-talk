@@ -7,25 +7,30 @@ import {
   DEFAULT_WHISPER_URL,
   STT_PROVIDERS,
   TTS_PROVIDERS,
+  chatModels,
   defaultChatModel,
   listChatModels,
   type ChatProvider,
   type SttProvider,
   type TtsProvider,
 } from "./providers";
-import { CURSOR_MODELS, GROK_VOICES, KOKORO_VOICES, MISTRAL_VOICES } from "./voices";
+import { CURSOR_MODELS, GOOGLE_VOICES, GROK_VOICES, KOKORO_VOICES, MISTRAL_VOICES, OPENAI_VOICES } from "./voices";
 
 export const ACCENTS = [
-  { id: "theme", label: "Theme" },
-  { id: "red", label: "Red" },
-  { id: "orange", label: "Orange" },
-  { id: "yellow", label: "Yellow" },
-  { id: "green", label: "Green" },
-  { id: "cyan", label: "Cyan" },
-  { id: "blue", label: "Blue" },
-  { id: "pink", label: "Pink" },
-  { id: "purple", label: "Purple" },
+  { id: "theme", label: "Theme", color: "var(--interactive-accent)" },
+  { id: "red", label: "Red", color: "#e93147" },
+  { id: "orange", label: "Orange", color: "#ec7500" },
+  { id: "yellow", label: "Yellow", color: "#e0ac00" },
+  { id: "green", label: "Green", color: "#08b94e" },
+  { id: "cyan", label: "Cyan", color: "#00bfbc" },
+  { id: "blue", label: "Blue", color: "#086ddd" },
+  { id: "pink", label: "Pink", color: "#d53984" },
+  { id: "purple", label: "Purple", color: "#7852ee" },
 ] as const;
+
+export function accentColor(id: string): string {
+  return ACCENTS.find((a) => a.id === id)?.color || "#ec7500";
+}
 
 export type AccentId = (typeof ACCENTS)[number]["id"];
 
@@ -109,6 +114,11 @@ export function scopeMods(hk: DictateHotkey): string[] {
 export interface LMVoiceSettings {
   xaiApiKey: string;
   grokVoice: string;
+  openaiApiKey: string;
+  openaiVoice: string;
+  googleApiKey: string;
+  googleVoice: string;
+  anthropicApiKey: string;
   cursorApiKey: string;
   chatProvider: ChatProvider;
   sttProvider: SttProvider;
@@ -138,6 +148,11 @@ export interface LMVoiceSettings {
 export const DEFAULT_SETTINGS: LMVoiceSettings = {
   xaiApiKey: "",
   grokVoice: "eve",
+  openaiApiKey: "",
+  openaiVoice: "marin",
+  googleApiKey: "",
+  googleVoice: "Kore",
+  anthropicApiKey: "",
   cursorApiKey: "",
   chatProvider: "cursor",
   sttProvider: "grok",
@@ -164,6 +179,14 @@ export const DEFAULT_SETTINGS: LMVoiceSettings = {
   personalityFile: "Jarvis.md",
 };
 
+function secretField(setting: Setting, value: string, placeholder: string, onChange: (v: string) => void) {
+  setting.addText((t) => {
+    t.inputEl.type = "password";
+    t.setPlaceholder(placeholder);
+    t.setValue(value).onChange(onChange);
+  });
+}
+
 function dropdown(
   setting: Setting,
   options: { id: string; label: string }[],
@@ -176,12 +199,6 @@ function dropdown(
     d.setValue(value);
     d.onChange((v) => void onChange(v));
   });
-}
-
-function choiceMap(options: { id: string; label: string }[]) {
-  const out: Record<string, string> = {};
-  for (const o of options) out[o.id] = o.label;
-  return out;
 }
 
 function isHtml(el: ChildNode): el is HTMLElement {
@@ -267,19 +284,39 @@ export class LMVoiceSettingTab extends PluginSettingTab {
         items: [
           {
             name: "xAI API key",
-            desc: "From console.x.ai. Leave empty to use XAI_API_KEY in a vault .env file. Used for Grok Voice and Grok STT.",
+            desc: "console.x.ai — Grok Voice and Grok STT. Or XAI_API_KEY in a vault .env.",
             render: (setting: Setting) => {
               const cur = this.plugin.settings;
-              setting.addText((t) => {
-                t.inputEl.type = "password";
-                t.setPlaceholder("xai-…");
-                t.setValue(cur.xaiApiKey).onChange((v) => save(() => (cur.xaiApiKey = v.trim())));
-              });
+              secretField(setting, cur.xaiApiKey, "xai-…", (v) => void save(() => (cur.xaiApiKey = v.trim())));
+            },
+          },
+          {
+            name: "OpenAI API key",
+            desc: "platform.openai.com — ChatGPT Voice and ChatGPT STT. Or OPENAI_API_KEY in a vault .env.",
+            render: (setting: Setting) => {
+              const cur = this.plugin.settings;
+              secretField(setting, cur.openaiApiKey, "sk-…", (v) => void save(() => (cur.openaiApiKey = v.trim())));
+            },
+          },
+          {
+            name: "Google API key",
+            desc: "aistudio.google.com — Google Live and Google STT. Or GOOGLE_API_KEY / GEMINI_API_KEY in a vault .env.",
+            render: (setting: Setting) => {
+              const cur = this.plugin.settings;
+              secretField(setting, cur.googleApiKey, "AIza…", (v) => void save(() => (cur.googleApiKey = v.trim())));
+            },
+          },
+          {
+            name: "Anthropic API key",
+            desc: "console.anthropic.com — Claude chat. Or ANTHROPIC_API_KEY in a vault .env.",
+            render: (setting: Setting) => {
+              const cur = this.plugin.settings;
+              secretField(setting, cur.anthropicApiKey, "sk-ant-…", (v) => void save(() => (cur.anthropicApiKey = v.trim())));
             },
           },
           {
             name: "Speech to text",
-            desc: "Dictation, and Jarvis listen when Talk is not Grok Voice. Whisper needs a local OpenAI-compatible server.",
+            desc: "Dictation, and Jarvis listen when Talk is Kokoro or Mistral. Whisper needs a local OpenAI-compatible server.",
             render: (setting: Setting) => {
               dropdown(setting, STT_PROVIDERS, s.sttProvider || "grok", async (v) => {
                 await save(() => (s.sttProvider = v as SttProvider));
@@ -295,7 +332,7 @@ export class LMVoiceSettingTab extends PluginSettingTab {
           },
           {
             name: "Talk",
-            desc: "Grok Voice is speech-to-speech. Kokoro or Mistral: listen with Speech to text, reply with Chat, then speak.",
+            desc: "Grok, ChatGPT, and Google are speech-to-speech. Kokoro or Mistral: STT, then Chat, then speak.",
             render: (setting: Setting) => {
               dropdown(setting, TTS_PROVIDERS, s.ttsProvider || "grok", async (v) => {
                 await save(() => (s.ttsProvider = v as TtsProvider));
@@ -309,6 +346,22 @@ export class LMVoiceSettingTab extends PluginSettingTab {
             visible: () => this.plugin.settings.ttsProvider === "grok",
             render: (setting: Setting) => {
               dropdown(setting, GROK_VOICES, s.grokVoice || "eve", (v) => save(() => (s.grokVoice = v)));
+            },
+          },
+          {
+            name: "Jarvis voice",
+            desc: "ChatGPT Realtime voice.",
+            visible: () => this.plugin.settings.ttsProvider === "openai",
+            render: (setting: Setting) => {
+              dropdown(setting, OPENAI_VOICES, s.openaiVoice || "marin", (v) => save(() => (s.openaiVoice = v)));
+            },
+          },
+          {
+            name: "Jarvis voice",
+            desc: "Gemini Live voice.",
+            visible: () => this.plugin.settings.ttsProvider === "google",
+            render: (setting: Setting) => {
+              dropdown(setting, GOOGLE_VOICES, s.googleVoice || "Kore", (v) => save(() => (s.googleVoice = v)));
             },
           },
           {
@@ -327,7 +380,10 @@ export class LMVoiceSettingTab extends PluginSettingTab {
           {
             name: "Mistral API key",
             desc: "From console.mistral.ai. Leave empty to use MISTRAL_API_KEY in a vault .env file.",
-            visible: () => this.plugin.settings.sttProvider === "mistral" || this.plugin.settings.ttsProvider === "mistral",
+            visible: () => {
+              const p = this.plugin.settings;
+              return p.sttProvider === "mistral" || p.ttsProvider === "mistral" || p.chatProvider === "mistral";
+            },
             render: (setting: Setting) => {
               const cur = this.plugin.settings;
               setting.addText((t) => {
@@ -348,14 +404,17 @@ export class LMVoiceSettingTab extends PluginSettingTab {
           },
           {
             name: "Chat",
-            desc: "Cursor (SDK against this vault) or Ollama. Used for typed turns, and for Jarvis when Talk is Kokoro or Mistral.",
+            desc: "Used for typed turns, and for Jarvis when Talk is Kokoro or Mistral.",
             render: (setting: Setting) => {
               dropdown(setting, CHAT_PROVIDERS, s.chatProvider, async (v) => {
                 await save(() => {
                   const next = v as ChatProvider;
                   s.chatProvider = next;
-                  if (next === "cursor" && !CURSOR_MODELS.some((m) => m.id === s.llmModel)) {
-                    s.llmModel = defaultChatModel("cursor");
+                  const models = chatModels(next);
+                  if (models.length && !models.some((m) => m.id === s.llmModel)) {
+                    s.llmModel = defaultChatModel(next);
+                  } else if (next === "ollama" && models.length === 0 && CURSOR_MODELS.some((m) => m.id === s.llmModel)) {
+                    s.llmModel = defaultChatModel("ollama");
                   }
                 });
                 this.update();
@@ -370,16 +429,18 @@ export class LMVoiceSettingTab extends PluginSettingTab {
           },
           {
             name: "Chat model",
-            visible: () => this.plugin.settings.chatProvider === "cursor",
-            control: { type: "dropdown", key: "llmModel", options: choiceMap(CURSOR_MODELS) },
+            visible: () => this.plugin.settings.chatProvider !== "ollama",
+            render: (setting: Setting) => {
+              const cur = this.plugin.settings;
+              dropdown(setting, chatModels(cur.chatProvider), cur.llmModel || defaultChatModel(cur.chatProvider), (v) =>
+                save(() => (cur.llmModel = v))
+              );
+            },
           },
           {
             name: "Chat model",
             desc: "Must be loaded. Refresh lists /v1/models.",
-            visible: () => {
-              const p = this.plugin.settings.chatProvider;
-              return p !== "cursor";
-            },
+            visible: () => this.plugin.settings.chatProvider === "ollama",
             render: (setting: Setting) => {
               const cur = this.plugin.settings;
               setting.addText((t) => {
@@ -458,8 +519,8 @@ export class LMVoiceSettingTab extends PluginSettingTab {
             save
           ),
           this.hotkeyItem(
-            "Dictate",
-            "Types into the open note at the cursor. Default Ctrl+D. Escape stops.",
+            "Dictation",
+            "Press the hotkey, click in the open note, and speech is typed at that cursor. Default Ctrl+D. Escape stops.",
             "noteHotkey",
             save
           ),

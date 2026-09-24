@@ -27,10 +27,14 @@ export class VoiceView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private plugin: LMVoicePlugin) {
     super(leaf);
-    const key = () => this.plugin.xaiKey();
-    const cursorKey = () => this.plugin.cursorKey();
-    this.agent = new VaultAgent(this.app, () => this.plugin.settings, key, cursorKey);
-    this.voice = new VoiceIO(() => this.plugin.settings, key, () => this.plugin.mistralKey());
+    this.agent = new VaultAgent(this.app, () => this.plugin.settings, this.plugin.agentKeys());
+    this.voice = new VoiceIO(
+      () => this.plugin.settings,
+      () => this.plugin.xaiKey(),
+      () => this.plugin.mistralKey(),
+      () => this.plugin.openaiKey(),
+      () => this.plugin.googleKey()
+    );
   }
 
   getViewType() {

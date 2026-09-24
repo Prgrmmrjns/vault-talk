@@ -1,6 +1,13 @@
 import { requestUrl } from "obsidian";
-import { parseJson } from "./providers";
+import {
+  DEFAULT_KOKORO_URL,
+  DEFAULT_WHISPER_URL,
+  MISTRAL_API,
+  openaiRoot,
+  parseJson,
+} from "./providers";
 import type { LMVoiceSettings } from "./settings";
+import { type LiveHandlers } from "./stt-stream";
 
 type RecLike = {
   lang: string;
@@ -18,19 +25,8 @@ type RecLike = {
   onend: (() => void) | null;
 };
 
-const API = "https://api.mistral.ai/v1";
+const API = "https://api.x.ai/v1";
 const SILENCE_MS = 10_000;
-
-function speakable(t: string) {
-  return t
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/[#*_~>]/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1600);
-}
 
 function multipart(fields: Record<string, string>, filename: string, bytes: Uint8Array, mime: string) {
   const boundary = "----ObsidianForm" + Date.now();
@@ -111,23 +107,18 @@ function watchSilence(stream: MediaStream, onFire: () => void) {
   };
 }
 
-function b64ToBytes(b64: string) {
-  const bin = atob(String(b64).replace(/\s/g, ""));
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
 export class VoiceIO {
   private audio: HTMLAudioElement | null = null;
   private unvad: (() => void) | null = null;
   private rec: MediaRecorder | null = null;
   private recWeb: RecLike | null = null;
   private cancelled = false;
+  private stopping = false;
 
   constructor(
     private settings: () => LMVoiceSettings,
-    private key: () => Promise<string>
+    private key: () => Promise<string>,
+    private mistralKey: () => Promise<string> = async () => ""
   ) {}
 
   cancelSpeak() {
@@ -144,7 +135,7 @@ export class VoiceIO {
   }
 
   stopListen() {
-    this.cancelled = true;
+    this.stopping = true;
     this.unvad?.();
     this.unvad = null;
     try {
@@ -154,22 +145,186 @@ export class VoiceIO {
     }
     this.recWeb = null;
     try {
-      if (this.rec && this.rec.state !== "inactive") this.rec.stop();
+      if (this.rec && this.rec.state !== "inactive") {
+        this.rec.requestData();
+        this.rec.stop();
+      }
     } catch {
       /* ignore */
     }
   }
 
+  cancelListen() {
+    this.cancelled = true;
+    this.stopListen();
+  }
+
+  async listenLive(handlers: LiveHandlers): Promise<string> {
+    this.cancelled = false;
+    this.stopping = false;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error("Microphone not available. Allow mic for Obsidian.");
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (this.cancelled) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new Error("Cancelled");
+    }
+    const live: LiveHandlers = {
+      ...handlers,
+      onText: (full) => handlers.onText(full),
+    };
+    try {
+      return await this.listenChunks(stream, live);
+    } finally {
+      stream.getTracks().forEach((t) => t.stop());
+    }
+  }
+
+  private async listenChunks(stream: MediaStream, handlers: LiveHandlers): Promise<string> {
+    if (typeof MediaRecorder === "undefined") throw new Error("Microphone not available. Allow mic for Obsidian.");
+    const mime = pickMime();
+    const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    this.rec = rec;
+    const chunks: Blob[] = [];
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size) chunks.push(e.data);
+    };
+    rec.start(250);
+
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    let ctx: AudioContext | null = null;
+    let vadTimer = 0;
+    if (Ctx) {
+      ctx = new Ctx();
+      await ctx.resume().catch(() => {});
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      src.connect(analyser);
+      const buf = new Uint8Array(analyser.fftSize);
+      let speaking = false;
+      let loud = 0;
+      let quiet = 0;
+      vadTimer = window.setInterval(() => {
+        analyser.getByteTimeDomainData(buf);
+        let sum = 0;
+        for (let i = 0; i < buf.length; i++) {
+          const v = ((buf[i] ?? 128) - 128) / 128;
+          sum += v * v;
+        }
+        const level = Math.sqrt(sum / buf.length);
+        handlers.onLevel?.(level);
+        if (level > 0.018) {
+          loud++;
+          quiet = 0;
+        } else {
+          quiet++;
+          loud = 0;
+        }
+        const next = speaking ? quiet < 10 : loud >= 2;
+        if (next !== speaking) {
+          speaking = next;
+          handlers.onVad?.(speaking);
+        }
+      }, 80);
+    }
+
+    let last = "";
+    let lastErr = "";
+    let busy = false;
+    const tick = window.setInterval(() => {
+      if (busy || this.cancelled || this.stopping || !chunks.length) return;
+      busy = true;
+      const blob = new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" });
+      const ext = (blob.type || "").includes("mp4") ? "m4a" : "webm";
+      void blob
+        .arrayBuffer()
+        .then((buf) => this.transcribeBytes(new Uint8Array(buf), `speech.${ext}`, blob.type || "audio/webm"))
+        .then((text) => {
+          if (!text || this.cancelled) return;
+          last = text;
+          lastErr = "";
+          handlers.onText(text);
+        })
+        .catch((err) => {
+          lastErr = err instanceof Error ? err.message : String(err);
+          handlers.onError?.(lastErr);
+        })
+        .finally(() => {
+          busy = false;
+        });
+    }, 1400);
+
+    try {
+      await new Promise<void>((resolve) => {
+        const poll = () => {
+          if (this.cancelled || this.stopping) {
+            resolve();
+            return;
+          }
+          window.setTimeout(poll, 80);
+        };
+        poll();
+      });
+      window.clearInterval(tick);
+      window.clearInterval(vadTimer);
+      await ctx?.close().catch(() => {});
+      if (this.cancelled) {
+        try {
+          if (rec.state !== "inactive") rec.stop();
+        } catch {
+          /* ignore */
+        }
+        this.rec = null;
+        throw new Error("Cancelled");
+      }
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        rec.onerror = () => reject(new Error("Recording failed"));
+        rec.onstop = () => {
+          this.rec = null;
+          resolve(new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" }));
+        };
+        try {
+          if (rec.state !== "inactive") {
+            rec.requestData();
+            rec.stop();
+          } else resolve(new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" }));
+        } catch {
+          resolve(new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" }));
+        }
+      });
+      if (!blob.size) {
+        if (last) return last;
+        if (lastErr) throw new Error(lastErr);
+        return last;
+      }
+      const ext = (blob.type || "").includes("mp4") ? "m4a" : "webm";
+      try {
+        const text = await this.transcribeBytes(new Uint8Array(await blob.arrayBuffer()), `speech.${ext}`, blob.type || "audio/webm");
+        if (text) handlers.onText(text);
+        return text || last;
+      } catch (err) {
+        if (last) return last;
+        throw err;
+      }
+    } finally {
+      window.clearInterval(tick);
+      window.clearInterval(vadTimer);
+      await ctx?.close().catch(() => {});
+      this.rec = null;
+    }
+  }
+
   async listenTurn(): Promise<string> {
     this.cancelled = false;
-    if (this.settings().sttProvider === "browser") return this.listenBrowser();
-    return this.listenMistral();
+    return this.listenCloud();
   }
 
   private listenBrowser(): Promise<string> {
     const w = window as Window & { SpeechRecognition?: new () => RecLike; webkitSpeechRecognition?: new () => RecLike };
     const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
-    if (!Ctor) throw new Error("This computer has no speech recognition. Switch STT to Mistral, or type.");
+    if (!Ctor) throw new Error("This computer has no speech recognition. Switch STT to Grok, or type.");
     return new Promise((resolve, reject) => {
       const rec = new Ctor();
       this.recWeb = rec;
@@ -233,7 +388,12 @@ export class VoiceIO {
     });
   }
 
-  private async listenMistral(): Promise<string> {
+  private async listenBrowserLive(stream: MediaStream, handlers: LiveHandlers): Promise<string> {
+    stream.getTracks().forEach((t) => t.stop());
+    return this.listenBrowser();
+  }
+
+  private async listenCloud(): Promise<string> {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       throw new Error("Microphone not available. Allow mic for Obsidian.");
     }
@@ -273,39 +433,82 @@ export class VoiceIO {
   }
 
   async transcribeBytes(bytes: Uint8Array, filename: string, mime: string): Promise<string> {
-    const s = this.settings();
-    const { boundary, body } = multipart(
-      { model: s.sttModel || "voxtral-mini-latest", language: "en" },
-      filename,
-      bytes,
-      mime || "application/octet-stream"
-    );
-    const res = await requestUrl({
-      url: `${API}/audio/transcriptions`,
-      method: "POST",
-      headers: {
-        Authorization: "Bearer " + (await this.key()),
-        "Content-Type": `multipart/form-data; boundary=${boundary}`,
-      },
-      body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
-      throw: false,
+    const kind = this.settings().sttProvider;
+    if (kind === "whisper") return this.transcribeWhisper(bytes, filename, mime);
+    if (kind === "mistral") return this.transcribeMistral(bytes, filename, mime);
+    return this.transcribeGrok(bytes, filename, mime);
+  }
+
+  private async transcribeGrok(bytes: Uint8Array, filename: string, mime: string): Promise<string> {
+    return this.postStt(`${API}/stt`, { language: "en", format: "true" }, bytes, filename, mime, {
+      Authorization: "Bearer " + (await this.key()),
     });
+  }
+
+  private async transcribeWhisper(bytes: Uint8Array, filename: string, mime: string): Promise<string> {
+    const root = openaiRoot(this.settings().whisperUrl || DEFAULT_WHISPER_URL);
+    return this.postStt(`${root}/audio/transcriptions`, { model: "whisper-1", language: "en" }, bytes, filename, mime);
+  }
+
+  private async transcribeMistral(bytes: Uint8Array, filename: string, mime: string): Promise<string> {
+    return this.postStt(
+      `${MISTRAL_API}/audio/transcriptions`,
+      { model: "voxtral-mini-latest", language: "en" },
+      bytes,
+      filename,
+      mime,
+      { Authorization: "Bearer " + (await this.mistralKey()) }
+    );
+  }
+
+  private async postStt(
+    url: string,
+    fields: Record<string, string>,
+    bytes: Uint8Array,
+    filename: string,
+    mime: string,
+    headers: Record<string, string> = {}
+  ): Promise<string> {
+    const { boundary, body } = multipart(fields, filename, bytes, mime || "application/octet-stream");
+    let res;
+    try {
+      res = await requestUrl({
+        url,
+        method: "POST",
+        headers: { ...headers, "Content-Type": `multipart/form-data; boundary=${boundary}` },
+        body: body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+        throw: false,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(msg.includes("net") || /network/i.test(msg) ? `STT could not reach ${url}` : msg);
+    }
     if (res.status >= 300) throw new Error(`STT ${res.status}: ${(res.text || "").slice(0, 180)}`);
-    const text = String(parseJson(res).text || "").trim();
+    const json = parseJson(res);
+    const text = String(json.text || json.transcription || "").trim();
     if (!text) throw new Error("Empty transcript");
     return text;
   }
 
   async speak(text: string): Promise<void> {
-    const t = speakable(text);
+    const t = text
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/[#*_~>]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1600);
     if (!t) return;
     this.cancelSpeak();
-    if (this.settings().ttsProvider === "browser") return this.speakBrowser(t);
-    return this.speakMistral(t);
+    const kind = this.settings().ttsProvider;
+    if (kind === "kokoro") return this.speakKokoro(t);
+    if (kind === "mistral") return this.speakMistral(t);
+    return this.speakBrowser(t);
   }
 
   private speakBrowser(t: string): Promise<void> {
-    if (!window.speechSynthesis) throw new Error("This computer has no speech synthesis. Switch TTS to Mistral.");
+    if (!window.speechSynthesis) throw new Error("This computer has no speech synthesis.");
     return new Promise((resolve) => {
       const u = new SpeechSynthesisUtterance(t);
       u.lang = "en-US";
@@ -315,60 +518,66 @@ export class VoiceIO {
     });
   }
 
-  private async speakMistral(t: string): Promise<void> {
-    const s = this.settings();
-    const payload: Record<string, string> = {
-      model: s.ttsModel || "voxtral-mini-tts-2603",
-      input: t,
-      response_format: "mp3",
-      voice_id: s.ttsVoice || "en_paul_confident",
-    };
-    let res = await requestUrl({
-      url: `${API}/audio/speech`,
+  private async speakKokoro(t: string): Promise<void> {
+    const root = openaiRoot(this.settings().kokoroUrl || DEFAULT_KOKORO_URL);
+    const voice = this.settings().kokoroVoice || "af_heart";
+    const res = await requestUrl({
+      url: `${root}/audio/speech`,
       method: "POST",
-      headers: { Authorization: "Bearer " + (await this.key()), "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "kokoro", input: t, voice, response_format: "mp3" }),
       throw: false,
     });
-    if (res.status >= 300) {
-      delete payload.voice_id;
-      res = await requestUrl({
-        url: `${API}/audio/speech`,
-        method: "POST",
-        headers: { Authorization: "Bearer " + (await this.key()), "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        throw: false,
-      });
-    }
     if (res.status >= 300) throw new Error(`TTS ${res.status}: ${(res.text || "").slice(0, 180)}`);
-    let bytes: Uint8Array;
-    const rawText = String(res.text || "").trim();
-    if (rawText.startsWith("{")) {
-      const json = parseJson(res);
-      const b64 = String(json.audio_data || json.audio || json.data || "");
-      if (!b64) throw new Error("Empty speech");
-      bytes = b64ToBytes(b64);
-    } else if (res.arrayBuffer && res.arrayBuffer.byteLength > 80) {
-      bytes = new Uint8Array(res.arrayBuffer);
-    } else {
-      throw new Error("Empty speech");
+    await this.playBytes(res.arrayBuffer, "audio/mpeg");
+  }
+
+  private async speakMistral(t: string): Promise<void> {
+    const res = await requestUrl({
+      url: `${MISTRAL_API}/audio/speech`,
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + (await this.mistralKey()),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "voxtral-mini-tts-2603",
+        input: t,
+        voice_id: this.settings().mistralVoice || "gb_jane_neutral",
+        response_format: "mp3",
+        stream: false,
+      }),
+      throw: false,
+    });
+    if (res.status >= 300) throw new Error(`TTS ${res.status}: ${(res.text || "").slice(0, 180)}`);
+    const json = parseJson(res);
+    const b64 = String(json.audio_data || "");
+    if (b64) {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      await this.playBytes(out.buffer, "audio/mpeg");
+      return;
     }
-    const copy = new Uint8Array(bytes);
-    const url = URL.createObjectURL(new Blob([copy], { type: "audio/mpeg" }));
-    await new Promise<void>((resolve) => {
-      const a = new Audio(url);
-      this.audio = a;
-      a.onended = () => {
+    await this.playBytes(res.arrayBuffer, "audio/mpeg");
+  }
+
+  private playBytes(buf: ArrayBuffer, mime: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(new Blob([new Uint8Array(buf)], { type: mime }));
+      const audio = new Audio(url);
+      this.audio = audio;
+      audio.onended = () => {
         URL.revokeObjectURL(url);
-        if (this.audio === a) this.audio = null;
+        if (this.audio === audio) this.audio = null;
         resolve();
       };
-      a.onerror = () => {
+      audio.onerror = () => {
         URL.revokeObjectURL(url);
-        if (this.audio === a) this.audio = null;
-        resolve();
+        if (this.audio === audio) this.audio = null;
+        reject(new Error("Could not play speech"));
       };
-      void a.play().catch(() => resolve());
+      void audio.play().catch(reject);
     });
   }
 }

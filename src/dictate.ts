@@ -1,262 +1,204 @@
-import { Editor, MarkdownView, Notice } from "obsidian";
-import { StateEffect } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, ViewUpdate, type DecorationSet } from "@codemirror/view";
-import { VoiceIO } from "./audio";
+import { MarkdownView, Notice, TFile, type Editor, type EditorPosition } from "obsidian";
 import type LMVoicePlugin from "./main";
+import { VoiceIO } from "./audio";
+import { hotkeyLabel } from "./settings";
 
-type Target = {
-  filePath: string;
-  start: number;
-  end: number;
-  title: string;
-  cursor: { line: number; ch: number };
-  onHeading: boolean;
-};
+export type DictateState = "off" | "on" | "active";
+export type DictateEvt = "state" | "text";
 
-const HEADING = /^(#{1,6})\s+(.*)$/;
-const NAV = /^(ArrowUp|ArrowDown|ArrowLeft|ArrowRight|Home|End|PageUp|PageDown)$/;
-const tick = StateEffect.define<null>();
-
-let paint = (_view: EditorView): DecorationSet => Decoration.none;
-
-function sectionAt(getLine: (i: number) => string, last: number, line: number) {
-  let start = 0;
-  let level = 0;
-  let title = "";
-  for (let i = line; i >= 0; i--) {
-    const m = getLine(i).match(HEADING);
-    if (m?.[1]) {
-      start = i;
-      level = m[1].length;
-      title = (m[2] || "").trim();
-      break;
-    }
-  }
-  let end = last;
-  for (let i = start + 1; i <= last; i++) {
-    const m = getLine(i).match(HEADING);
-    if (m?.[1] && m[1].length <= (level || 6)) {
-      end = i - 1;
-      break;
-    }
-  }
-  return { start, end, title };
-}
-
-function marks(view: EditorView, start: number, end: number): DecorationSet {
-  const deco = [];
-  const a = Math.max(1, start + 1);
-  const last = Math.min(view.state.doc.lines, end + 1);
-  for (let n = a; n <= last; n++) {
-    const line = view.state.doc.line(n);
-    deco.push(Decoration.line({ class: n === a ? "vt-dictate-sec vt-dictate-head" : "vt-dictate-sec" }).range(line.from));
-  }
-  return Decoration.set(deco);
-}
-
-const dictationExt = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
-    constructor(view: EditorView) {
-      this.decorations = paint(view);
-    }
-    update(u: ViewUpdate) {
-      this.decorations = paint(u.view);
-    }
-  },
-  { decorations: (v) => v.decorations }
-);
-
-function cmOf(editor: Editor): EditorView | null {
-  return (editor as unknown as { cm?: EditorView }).cm ?? null;
-}
-
-function isFnKey(e: KeyboardEvent) {
-  if (e.repeat) return false;
-  const k = e.key;
-  const c = e.code;
-  return k === "Fn" || k === "Globe" || c === "Fn" || c === "FnLeft" || c === "FnRight" || c === "Lang1";
-}
-
-export class Dictation {
+export class EditorDictate {
   private voice: VoiceIO;
-  private listening = false;
-  private hold: { start: number; end: number } | null = null;
-  private status: HTMLElement;
-  private lastFn = 0;
+  private busy = false;
+  private view: MarkdownView | null = null;
+  private from: EditorPosition | null = null;
+  private written = 0;
+  private pad = "";
+  private fns = new Set<(e: DictateEvt) => void>();
+  loudIndex = 0;
+  private errShown = false;
+  state: DictateState = "off";
+  text = "";
+  levels = new Float32Array(40);
 
   constructor(private plugin: LMVoicePlugin) {
-    this.voice = new VoiceIO(() => plugin.settings, () => plugin.mistralKey());
-    this.status = plugin.addStatusBarItem();
-    this.status.addClass("vt-dictate-status");
-    this.status.hide();
+    this.voice = new VoiceIO(
+      () => plugin.settings,
+      () => plugin.xaiKey(),
+      () => plugin.mistralKey()
+    );
   }
 
-  private deco(view: EditorView): DecorationSet {
-    if (!this.plugin.settings.dictation) return Decoration.none;
-    if (this.hold) return marks(view, this.hold.start, this.hold.end);
-    const line = view.state.doc.lineAt(view.state.selection.main.head).number - 1;
-    const last = view.state.doc.lines - 1;
-    const { start, end } = sectionAt((i) => view.state.doc.line(i + 1).text, last, line);
-    return marks(view, start, end);
+  get listening() {
+    return this.state !== "off";
   }
 
-  onload() {
-    paint = (view) => this.deco(view);
-    this.plugin.registerEditorExtension(dictationExt);
-    this.plugin.addCommand({
-      id: "dictate",
-      name: "Dictate into note",
-      checkCallback: (checking) => {
-        if (!this.plugin.settings.dictation) return false;
-        const view = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-        if (!view?.editor) return false;
-        if (!checking) void this.toggle();
-        return true;
-      },
-    });
-    this.plugin.registerDomEvent(document, "keydown", (e) => this.onKey(e), { capture: true });
-    this.plugin.registerDomEvent(document, "keyup", (e) => this.onKey(e), { capture: true });
-    this.plugin.registerDomEvent(document, "keyup", (e) => {
-      if (this.plugin.settings.dictation && NAV.test(e.key)) this.refresh();
-    });
-    this.plugin.registerDomEvent(document, "click", () => {
-      if (this.plugin.settings.dictation) window.setTimeout(() => this.refresh(), 0);
-    });
-    this.plugin.registerDomEvent(this.status, "click", () => void this.toggle());
-    this.plugin.registerEvent(this.plugin.app.workspace.on("active-leaf-change", () => this.refresh()));
-    this.plugin.register(() => {
-      paint = () => Decoration.none;
-    });
-    this.sync();
+  onChange(fn: (e: DictateEvt) => void) {
+    this.fns.add(fn);
+    return () => this.fns.delete(fn);
   }
 
-  sync() {
-    document.body.toggleClass("vt-dictate-on", this.plugin.settings.dictation);
-    if (!this.plugin.settings.dictation) {
-      if (this.listening) this.stopOnly();
-      this.status.hide();
-    }
-    this.refresh();
+  remember(view: MarkdownView) {
+    if (this.state === "off") this.view = view;
   }
 
-  private refresh() {
-    const editor = this.view()?.editor;
-    if (editor) cmOf(editor)?.dispatch({ effects: tick.of(null) });
-    this.refreshStatus();
+  cancel() {
+    this.voice.cancelListen();
   }
 
-  private onKey(e: KeyboardEvent) {
-    if (!this.plugin.settings.dictation || !isFnKey(e)) return;
-    const now = Date.now();
-    if (now - this.lastFn < 400) return;
-    this.lastFn = now;
-    e.preventDefault();
-    e.stopPropagation();
-    void this.toggle();
-  }
-
-  private view(): MarkdownView | null {
-    const v = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
-    return v?.editor ? v : null;
-  }
-
-  private targetFrom(editor: Editor, view: MarkdownView): Target | null {
-    const file = view.file;
-    if (!file) return null;
-    const cursor = editor.getCursor();
-    const { start, end, title } = sectionAt((i) => editor.getLine(i), editor.lastLine(), cursor.line);
-    return {
-      filePath: file.path,
-      start,
-      end,
-      title: title || file.basename,
-      cursor,
-      onHeading: !!editor.getLine(start).match(HEADING) && cursor.line === start,
-    };
-  }
-
-  private refreshStatus() {
-    if (!this.plugin.settings.dictation) {
-      this.status.hide();
-      return;
-    }
-    this.status.show();
-    if (this.listening) {
-      this.status.setText("Listening…");
-      return;
-    }
-    const view = this.view();
-    if (!view) {
-      this.status.setText("Dictate");
-      return;
-    }
-    const t = this.targetFrom(view.editor, view);
-    this.status.setText(`Dictate · ${t?.title || view.file?.basename || "note"}`);
-  }
-
-  async toggle() {
-    if (this.listening) {
+  toggle() {
+    if (this.state !== "off") {
       this.voice.stopListen();
       return;
     }
-    const view = this.view();
+    if (this.busy) return;
+    void this.start();
+  }
+
+  private async start() {
+    const view = await this.focusNote();
     if (!view) {
-      new Notice("Open a markdown note in edit view.");
+      new Notice("Open a note to dictate.");
       return;
     }
-    const target = this.targetFrom(view.editor, view);
-    if (!target) {
-      new Notice("Open a markdown note in edit view.");
-      return;
-    }
-    this.listening = true;
-    this.hold = { start: target.start, end: target.end };
-    document.body.addClass("vt-dictate-listen");
-    this.refresh();
-    try {
-      const text = await this.voice.listenTurn();
-      if (!text.trim()) return;
-      this.insert(target, text.trim());
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg !== "Empty transcript") new Notice(msg);
-    } finally {
-      this.listening = false;
-      this.hold = null;
-      document.body.removeClass("vt-dictate-listen");
-      this.refresh();
-    }
+    this.view = view;
+    this.busy = true;
+    this.text = "";
+    this.from = null;
+    this.written = 0;
+    this.pad = "";
+    this.loudIndex = 0;
+    this.levels.fill(0);
+    this.errShown = false;
+    this.setState("on");
+    const keys = hotkeyLabel(this.plugin.settings.noteHotkey);
+    new Notice(keys ? `Dictating into the note · ${keys} or Esc stops` : "Dictating into the note · Esc stops");
+    void this.voice
+      .listenLive({
+        onText: (full) => {
+          this.text = full;
+          this.paintEditor();
+          this.emit("text");
+        },
+        onLevel: (level) => this.pushLevel(level),
+        onVad: (speaking) => {
+          if (this.state === "off") return;
+          this.setState(speaking ? "active" : "on");
+        },
+        onError: (msg) => {
+          if (this.errShown) return;
+          if (/API key|401|403|could not reach|STT /.test(msg)) {
+            this.errShown = true;
+            new Notice(msg);
+          }
+        },
+      })
+      .then((raw) => {
+        const text = raw.trim();
+        if (text && text !== this.text) {
+          this.text = text;
+          this.paintEditor();
+        }
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg === "Cancelled") {
+          this.revertEditor();
+          return;
+        }
+        if (msg.includes("Empty")) return;
+        new Notice(msg);
+      })
+      .finally(() => {
+        this.busy = false;
+        this.from = null;
+        this.written = 0;
+        this.setState("off");
+        this.emit("text");
+      });
   }
 
-  private stopOnly() {
-    this.listening = false;
-    this.hold = null;
-    this.voice.stopListen();
-    document.body.removeClass("vt-dictate-listen");
+  private async focusNote(): Promise<MarkdownView | null> {
+    const app = this.plugin.app;
+    const cur = app.workspace.getActiveViewOfType(MarkdownView);
+    if (cur?.file) return cur;
+    const leaves = app.workspace.getLeavesOfType("markdown");
+    for (let i = leaves.length - 1; i >= 0; i--) {
+      const leaf = leaves[i];
+      if (leaf?.view instanceof MarkdownView && leaf.view.file) {
+        await app.workspace.revealLeaf(leaf);
+        return leaf.view;
+      }
+    }
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    const path = `Journal/${d.getFullYear()}-${p(d.getMonth() + 1)}/${p(d.getDate())}-${p(d.getMonth() + 1)}-${d.getFullYear()}.md`;
+    const file = app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return null;
+    const leaf = app.workspace.getLeaf("tab");
+    await leaf.openFile(file);
+    return leaf.view instanceof MarkdownView ? leaf.view : null;
   }
 
-  private insert(t: Target, text: string) {
-    const view = this.view();
-    if (!view || view.file?.path !== t.filePath) {
-      new Notice("Note changed — dictation dropped.");
-      return;
+  private noteView(): MarkdownView | null {
+    const cur = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+    if (cur) return cur;
+    if (this.view && this.view.file) return this.view;
+    const leaves = this.plugin.app.workspace.getLeavesOfType("markdown");
+    for (let i = leaves.length - 1; i >= 0; i--) {
+      const leaf = leaves[i];
+      if (leaf?.view instanceof MarkdownView) return leaf.view;
     }
-    const editor = view.editor;
-    if (!t.onHeading && editor.somethingSelected()) {
-      editor.replaceSelection(text);
-      return;
+    return null;
+  }
+
+  private editor(): Editor | null {
+    const view = this.view;
+    if (!view) return this.noteView()?.editor ?? null;
+    const cur = this.plugin.app.workspace.getActiveViewOfType(MarkdownView);
+    if (cur && cur.file?.path === view.file?.path) return cur.editor;
+    return view.editor;
+  }
+
+  private paintEditor() {
+    const ed = this.editor();
+    if (!ed || !this.text) return;
+    if (!this.from) {
+      const pos = ed.getCursor();
+      const before = pos.ch > 0 ? ed.getLine(pos.line).slice(pos.ch - 1, pos.ch) : "";
+      this.pad = before && !/\s/.test(before) ? " " : "";
+      this.from = { line: pos.line, ch: pos.ch };
+      this.written = 0;
     }
-    if (!t.onHeading) {
-      const line = editor.getLine(t.cursor.line);
-      const pad = t.cursor.ch > 0 && !/\s$/.test(line.slice(0, t.cursor.ch)) ? " " : "";
-      editor.replaceRange(pad + text, t.cursor);
-      return;
-    }
-    let line = t.end;
-    while (line > t.start && !editor.getLine(line).trim()) line--;
-    const cur = editor.getLine(line);
-    const prefix = line === t.start || cur.trim() ? "\n\n" : "\n";
-    editor.replaceRange(prefix + text, { line, ch: cur.length });
+    const next = this.pad + this.text;
+    const start = ed.posToOffset(this.from);
+    const oldTo = ed.offsetToPos(start + this.written);
+    ed.replaceRange(next, this.from, oldTo);
+    this.written = next.length;
+    ed.setCursor(ed.offsetToPos(start + this.written));
+  }
+
+  private revertEditor() {
+    const ed = this.editor();
+    if (!ed || !this.from || !this.written) return;
+    const start = ed.posToOffset(this.from);
+    const oldTo = ed.offsetToPos(start + this.written);
+    ed.replaceRange("", this.from, oldTo);
+    this.written = 0;
+    this.text = "";
+  }
+
+  private pushLevel(level: number) {
+    this.loudIndex = (this.loudIndex + 1) % this.levels.length;
+    this.levels[this.loudIndex] = level;
+  }
+
+  private setState(state: DictateState) {
+    if (this.state === state) return;
+    this.state = state;
+    this.emit("state");
+  }
+
+  private emit(e: DictateEvt) {
+    for (const fn of this.fns) fn(e);
   }
 }

@@ -4,3 +4,8 @@ node_modules/
 .DS_Store
 *.js.map
 data.json
+.env
+.env.*
+.sdk-vendor/
+tools/
+.voice-logs/

@@ -1,7 +1,7 @@
 {
   "name": "vault-talk",
-  "version": "1.1.2",
-  "description": "Vault Talk — speak or type to your Obsidian vault with Mistral, Ollama, or LM Studio.",
+	"version": "1.3.0",
+  "description": "Vault Talk \u2014 Jarvis in Obsidian. Speak or type with Grok Voice; optionally edit markdown notes.",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -13,7 +13,7 @@
     "obsidian",
     "plugin",
     "vault-talk",
-    "mistral",
+    "grok",
     "voice",
     "tts"
   ],
@@ -21,7 +21,8 @@
   "license": "MIT",
   "dependencies": {
     "@codemirror/state": "6.5.0",
-    "@codemirror/view": "6.38.6"
+    "@codemirror/view": "6.38.6",
+    "@cursor/sdk": "^1.0.28"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",

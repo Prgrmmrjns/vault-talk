@@ -248,7 +248,7 @@ export class VoiceView extends ItemView {
 
   async toggle() {
     if (this.plugin.settings.dictation) {
-      await this.plugin.dictate.toggle();
+      this.plugin.dictate.toggle();
       return;
     }
     if (this.running) {

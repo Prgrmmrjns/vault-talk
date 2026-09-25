@@ -1,4 +1,4 @@
-import { MarkdownRenderChild, Notice, setIcon, type EventRef } from "obsidian";
+import { FileSystemAdapter, MarkdownRenderChild, Notice, setIcon, type EventRef } from "obsidian";
 import { VaultAgent } from "./agent";
 import { GrokVoiceSession, type VoiceHandlers, type VoicePhase } from "./grok-voice";
 import { GoogleVoiceSession } from "./google-voice";
@@ -338,7 +338,7 @@ export class JarvisPanel {
   private logDir(): string {
     const dir = this.plugin.manifest.dir || "";
     const ad = this.plugin.app.vault.adapter;
-    const base = "getBasePath" in ad && typeof ad.getBasePath === "function" ? ad.getBasePath() : "";
+    const base = ad instanceof FileSystemAdapter ? ad.getBasePath() : "";
     if (base && dir) return `${base}/${dir}/.voice-logs`;
     return `${dir}/.voice-logs`;
   }

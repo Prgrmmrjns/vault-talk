@@ -1,7 +1,7 @@
 {
 	"id": "vault-talk",
 	"name": "Vault Talk",
-	"version": "1.4.1",
+	"version": "1.4.2",
 	"minAppVersion": "1.13.0",
 	"description": "Desk and Jarvis in one plugin. Day view over today's note; talk with Grok, ChatGPT, or Google Live.",
 	"author": "Jonas Wolber",

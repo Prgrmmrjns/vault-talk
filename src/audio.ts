@@ -7,6 +7,7 @@ import {
   parseJson,
 } from "./providers";
 import type { LMVoiceSettings } from "./settings";
+import { txt } from "./txt";
 import { type LiveHandlers } from "./stt-stream";
 import { b64enc } from "./voice-pcm";
 
@@ -498,11 +499,16 @@ export class VoiceIO {
     if (res.status >= 300) throw new Error(`STT ${res.status}: ${(res.text || "").slice(0, 180)}`);
     const json = parseJson(res);
     const cands = json.candidates;
-    const first = Array.isArray(cands) ? cands[0] : null;
-    const parts =
-      first && typeof first === "object" && "content" in first
-        ? (first as { content?: { parts?: { text?: string }[] } }).content?.parts
-        : [];
+    const first: unknown = Array.isArray(cands) ? cands[0] : null;
+    const parts: { text?: string }[] = [];
+    if (first && typeof first === "object" && "content" in first) {
+      const content = (first as { content?: { parts?: unknown } }).content;
+      if (Array.isArray(content?.parts)) {
+        for (const part of content.parts) {
+          if (part && typeof part === "object") parts.push(part as { text?: string });
+        }
+      }
+    }
     const text = (parts || []).map((p) => p.text || "").join("").trim();
     if (!text) throw new Error("Empty transcript");
     return text;
@@ -532,7 +538,7 @@ export class VoiceIO {
     }
     if (res.status >= 300) throw new Error(`STT ${res.status}: ${(res.text || "").slice(0, 180)}`);
     const json = parseJson(res);
-    const text = String(json.text || json.transcription || "").trim();
+    const text = (txt(json.text) || txt(json.transcription)).trim();
     if (!text) throw new Error("Empty transcript");
     return text;
   }
@@ -598,7 +604,7 @@ export class VoiceIO {
     });
     if (res.status >= 300) throw new Error(`TTS ${res.status}: ${(res.text || "").slice(0, 180)}`);
     const json = parseJson(res);
-    const b64 = String(json.audio_data || "");
+    const b64 = txt(json.audio_data);
     if (b64) {
       const bin = atob(b64);
       const out = new Uint8Array(bin.length);

@@ -4,6 +4,7 @@ import { parseJson } from "./providers";
 import type { LMVoiceSettings } from "./settings";
 import { VoiceLogger, voiceSessionId } from "./voice-log";
 import type { VoiceHandlers, VoicePhase } from "./grok-voice";
+import { txt } from "./txt";
 import {
   PcmPlayer,
   RATE_24K,
@@ -309,9 +310,9 @@ export class OpenaiVoiceSession {
   }
 
   private async onEvent(event: Record<string, unknown>) {
-    const type = String(event.type || "");
+    const type = txt(event.type);
     if (type === "response.output_audio.delta" || type === "response.audio.delta") {
-      const delta = String(event.delta || event.audio || "");
+      const delta = txt(event.delta) || txt(event.audio);
       if (delta) this.playBytes(b64dec(delta));
       return;
     }
@@ -323,14 +324,14 @@ export class OpenaiVoiceSession {
       this.speechStoppedT = Date.now();
       this.setPhase("thinking");
     } else if (type === "input_audio_buffer.committed") {
-      this.handlers.onUser(String(event.item_id || ""), "");
+      this.handlers.onUser(txt(event.item_id), "");
     } else if (
       type === "conversation.item.input_audio_transcription.updated" ||
       type === "conversation.item.input_audio_transcription.delta" ||
       type === "conversation.item.input_audio_transcription.completed"
     ) {
-      const text = String(event.transcript || event.delta || event.text || "");
-      const id = String(event.item_id || "");
+      const text = txt(event.transcript) || txt(event.delta) || txt(event.text);
+      const id = txt(event.item_id);
       if (text) this.handlers.onUser(id, text);
     } else if (type === "response.created") {
       this.createdT = Date.now();
@@ -338,20 +339,20 @@ export class OpenaiVoiceSession {
       this.outBytes = 0;
       this.outDeltas = 0;
       this.outFirst = false;
-      this.responseId = String(
+      const rid =
         event.response && typeof event.response === "object" && "id" in event.response
-          ? (event.response as { id?: string }).id
-          : event.id || ""
-      );
+          ? (event.response as { id?: unknown }).id
+          : event.id;
+      this.responseId = txt(rid);
       this.assistant = "";
       this.spoke = false;
       this.player?.reset();
     } else if (type === "response.output_audio_transcript.delta" || type === "response.audio_transcript.delta") {
-      this.assistant += String(event.delta || "");
+      this.assistant += txt(event.delta);
       this.handlers.onAssistant(this.assistant, false);
       if (!this.outFirst) this.setPhase("thinking");
     } else if (type === "response.output_audio_transcript.done" || type === "response.audio_transcript.done") {
-      const t = String(event.transcript || this.assistant);
+      const t = txt(event.transcript) || this.assistant;
       this.assistant = t;
       this.finishAssistant(t);
     } else if (type === "response.function_call_arguments.done") {
@@ -361,15 +362,16 @@ export class OpenaiVoiceSession {
       this.maybeContinue();
       if (!this.fnNeed && this.live) this.setPhase("listening");
     } else if (type === "error") {
-      const msg = String((event.error as { message?: string } | undefined)?.message || event.message || "Voice error");
+      const errObj = event.error as { message?: unknown } | undefined;
+      const msg = txt(errObj?.message) || txt(event.message) || "Voice error";
       this.handlers.onError(this.errMsg(new Error(msg)));
     }
   }
 
   private async onFn(event: Record<string, unknown>) {
-    const name = String(event.name || "");
-    const callId = String(event.call_id || "");
-    const args = String(event.arguments || "{}");
+    const name = txt(event.name);
+    const callId = txt(event.call_id);
+    const args = txt(event.arguments) || "{}";
     this.fnNeed = true;
     this.fnWait++;
     this.setPhase("thinking");

@@ -1,5 +1,6 @@
 import { requestUrl } from "obsidian";
 import { parseJson } from "./providers";
+import { txt } from "./txt";
 
 export const REALTIME_STT = "voxtral-mini-transcribe-realtime-2602";
 const API = "https://api.mistral.ai/v1";
@@ -65,8 +66,8 @@ export async function mintRealtimeToken(key: string, model = REALTIME_STT): Prom
   const json = parseJson(res);
   const secret = json.client_secret;
   const token =
-    (typeof secret === "object" && secret && "value" in secret ? String((secret as { value?: string }).value || "") : "") ||
-    String(json.client_secret || json.token || "");
+    (secret && typeof secret === "object" && "value" in secret ? txt((secret as { value?: unknown }).value) : "") ||
+    txt(json.token);
   if (!token.startsWith("rt_")) throw new Error("No realtime token");
   return token;
 }
@@ -116,7 +117,7 @@ export async function streamRealtime(
     } catch {
       return;
     }
-    const type = String(msg.type || "");
+    const type = txt(msg.type);
     if (type === "session.created") {
       ws.send(
         JSON.stringify({
@@ -213,7 +214,7 @@ export async function streamRealtime(
     src.disconnect();
     mute.disconnect();
     await ctx.close().catch(() => {});
-    if (dead && !flags.stopping() && !flags.cancelled()) throw dead;
+    if (dead !== null && !flags.stopping() && !flags.cancelled()) throw new Error("Realtime STT failed");
     if (flags.cancelled()) {
       try {
         ws.close();

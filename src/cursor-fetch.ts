@@ -38,7 +38,7 @@ export function nodeFetch(input: RequestInfo | URL, init: RequestInit = {}): Pro
 
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(signal.reason ?? new Error("Aborted"));
+      reject(signal.reason instanceof Error ? signal.reason : new Error("Aborted"));
       return;
     }
     const req = lib.request(
@@ -82,10 +82,10 @@ export function nodeFetch(input: RequestInfo | URL, init: RequestInit = {}): Pro
         );
       }
     );
-    req.on("error", reject);
+    req.on("error", (err) => reject(err instanceof Error ? err : new Error("Request failed")));
     const onAbort = () => {
       req.destroy();
-      reject(signal?.reason ?? new Error("Aborted"));
+      reject(signal?.reason instanceof Error ? signal.reason : new Error("Aborted"));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     if (payload) req.write(payload);
@@ -95,9 +95,9 @@ export function nodeFetch(input: RequestInfo | URL, init: RequestInit = {}): Pro
 
 function electronFetch(): typeof fetch | null {
   try {
-    const req = (globalThis as { require?: (id: string) => { net?: { fetch?: typeof fetch } } }).require;
+    const req = (window as { require?: (id: string) => { net?: { fetch?: typeof fetch } } }).require;
     const net = req?.("electron")?.net;
-    if (typeof net?.fetch === "function") return net.fetch.bind(net);
+    if (typeof net?.fetch === "function") return (input: RequestInfo | URL, init?: RequestInit) => net.fetch!(input, init);
   } catch {
     /* renderer without electron.net */
   }
@@ -105,9 +105,9 @@ function electronFetch(): typeof fetch | null {
 }
 
 export function installCursorFetch(): () => void {
-  const prev = globalThis.fetch;
-  globalThis.fetch = (electronFetch() || nodeFetch) as typeof fetch;
+  const prev = window.fetch; // eslint-disable-line @typescript-eslint/unbound-method -- restore the previous fetch on uninstall
+  window.fetch = electronFetch() || nodeFetch;
   return () => {
-    globalThis.fetch = prev;
+    window.fetch = prev;
   };
 }

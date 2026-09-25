@@ -1,7 +1,9 @@
+/* eslint-disable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- desk view is untyped moment and DOM glue */
 // @ts-nocheck
 import { ItemView, Notice, Setting, TFile, requestUrl, setIcon } from "obsidian";
 
 const VIEW_TYPE = "desk-view";
+const PROJ_VIEW = "project-overview";
 const ISO = "YYYY-MM-DD";
 const PX = 1.2;
 const SNAP = 10;
@@ -83,7 +85,8 @@ function parseDaily(text) {
     for (const raw of text.slice(g.start, g.end).split("\n")) {
       const s = raw.trim();
       if (s.startsWith("```")) break;
-      if (!s) continue;
+      if (!s || s.startsWith(">") || /^- \[[ xX/]\]/.test(s)) continue;
+      if (/^one sentence\. what would make today done\??$/i.test(s)) continue;
       const v = s.replace(/^[-*]\s+/, "").replace(/^[*_]+|[*_]+$/g, "").trim();
       if (v && v !== "One outcome for today.") out.goal = v;
       break;
@@ -242,9 +245,12 @@ function btn(parent, icon, label, onClick, cls = "") {
   return b;
 }
 function autogrow(ta) {
-  const fit = () => { ta.style.height = "auto"; ta.style.height = ta.scrollHeight + "px"; };
+  const fit = () => {
+    ta.setCssProps({ height: "auto" });
+    ta.setCssProps({ height: ta.scrollHeight + "px" });
+  };
   ta.addEventListener("input", fit);
-  requestAnimationFrame(fit);
+  window.requestAnimationFrame(fit);
 }
 function lanes(items) {
   const sorted = items.slice().sort((a, b) => a.start - b.start || b.end - a.end);
@@ -288,6 +294,7 @@ class DeskView extends ItemView {
     this.expanded = new Set(["overdue", "today"]);
     this.scrolled = false;
     this.target = "today";
+    this.projTag = "";
   }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "Desk"; }
@@ -325,7 +332,7 @@ class DeskView extends ItemView {
       console.error("desk", e);
     } finally {
       this.busy = false;
-      if (this.again) { this.again = false; this.refresh(); }
+      if (this.again) { this.again = false; void this.refresh(); }
     }
   }
 
@@ -343,7 +350,7 @@ class DeskView extends ItemView {
 
   tick() {
     if (!this.data) return;
-    if (M().format(ISO) !== this.data.today) { this.scrolled = false; this.refresh(); return; }
+    if (M().format(ISO) !== this.data.today) { this.scrolled = false; void this.refresh(); return; }
     this.renderNow();
     this.placeNowLine();
   }
@@ -422,12 +429,23 @@ class DeskView extends ItemView {
     const el = this.goalEl;
     if (el.contains(document.activeElement)) return;
     el.empty();
-    el.createDiv({ cls: "desk-label", text: "Today's goal" });
-    const ta = el.createEl("textarea", { cls: "desk-goal-input", attr: { rows: 1, placeholder: "What would make today a win?", spellcheck: "false" } });
+    el.createDiv({ cls: "desk-label", text: "Today is done when" });
+    const ta = el.createEl("textarea", { cls: "desk-goal-input", attr: { rows: 1, placeholder: "Write one sentence.", spellcheck: "false" } });
     ta.value = this.data.daily.goal;
     autogrow(ta);
     ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } });
     ta.addEventListener("blur", () => { const v = ta.value.replace(/\s+/g, " ").trim(); if (v !== this.data.daily.goal) this.plugin.setGoal(v); });
+    if (!this.data.daily.blocks.length) {
+      const plan = el.createDiv("desk-goal-plan");
+      btn(plan, "plus", "Plan the hours", () => this.composer(this.plugin.freeSlot(60), null), "is-soft");
+    }
+    const status = el.createDiv("desk-day-status");
+    const photo = status.createSpan({ cls: "desk-status" + (this.data.photoDone ? " is-done" : "") });
+    photo.setText(this.data.photoDone ? "Photo added" : "Add a photo of today");
+    if (this.data.evening) {
+      const ref = status.createSpan({ cls: "desk-status" + (this.data.reflectDone ? " is-done" : " is-open") });
+      ref.setText(this.data.reflectDone ? "Reflection done" : "Reflection not done");
+    }
   }
 
   /* ---------- timeline ---------- */
@@ -441,8 +459,8 @@ class DeskView extends ItemView {
     const planned = blocks.reduce((a, b) => a + b.end - b.start, 0);
     const head = el.createDiv("desk-card-head");
     head.createDiv({ cls: "desk-card-title", text: "Day" });
-    head.createDiv({ cls: "desk-card-meta", text: `${blocks.length} blocks · ${dur(planned)} planned${d.events.length ? ` · ${d.events.length} events` : ""}` });
-    btn(head, "plus", "Add block", (e) => this.composer(this.plugin.freeSlot(60), e.currentTarget), "is-icon");
+    head.createDiv({ cls: "desk-card-meta", text: blocks.length ? `${blocks.length} blocks · ${dur(planned)}` : "Click a free hour, or plan one" });
+    btn(head, "plus", "Plan a block", () => this.composer(this.plugin.freeSlot(60), null), "is-soft");
 
     const allDay = d.events.filter((e) => e.allDay);
     if (allDay.length) {
@@ -509,7 +527,7 @@ class DeskView extends ItemView {
     this.nowLine = inner.createDiv("desk-nowline");
     this.nowLine.createSpan({ cls: "desk-nowline-t" });
     this.placeNowLine();
-    requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       if (keep != null && this.scrolled) tl.scrollTop = keep;
       else { tl.scrollTop = Math.max(0, (nowMin() - this.base - 90) * PX); this.scrolled = true; }
     });
@@ -576,7 +594,7 @@ class DeskView extends ItemView {
     this.closePop();
     const pop = this.contentEl.createDiv("desk-pop");
     this.pop = pop;
-    requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
       const box = this.contentEl.getBoundingClientRect();
       const r = anchor ? anchor.getBoundingClientRect() : { left: x, right: x, top: y, bottom: y };
       const w = pop.offsetWidth, h = pop.offsetHeight;
@@ -608,7 +626,7 @@ class DeskView extends ItemView {
       this.closePop();
       await this.plugin.addBlock(start, start + len, text.trim());
     };
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter") add(input.value); });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") void add(input.value); });
     const sug = this.data.tasks.overdue.concat(this.data.tasks.today, this.data.tasks.upcoming).slice(0, 6);
     if (sug.length) {
       pop.createDiv({ cls: "desk-label", text: "From your tasks" });
@@ -624,7 +642,7 @@ class DeskView extends ItemView {
     const foot = pop.createDiv("desk-pop-foot");
     btn(foot, "bell", "Reminder", () => { this.closePop(); this.plugin.addBlock(start, start + 15, "🔔 " + (input.value.trim() || "Reminder")); });
     btn(foot, "plus", "Add", () => add(input.value), "is-solid");
-    setTimeout(() => input.focus(), 30);
+    window.setTimeout(() => input.focus(), 30);
   }
 
   blockPop(it, anchor) {
@@ -660,31 +678,31 @@ class DeskView extends ItemView {
     el.empty();
     const head = el.createDiv("desk-card-head");
     head.createDiv({ cls: "desk-card-title", text: "Tasks" });
-    head.createDiv({ cls: "desk-card-meta", text: `${T.overdue.length + T.today.length} for today · ${this.data.doneToday} done` });
-    this.renderDuties();
+    head.createDiv({ cls: "desk-card-meta", text: T.today.length ? `${T.today.length} for today` : "Nothing for today yet" });
 
     const add = el.createDiv("desk-add");
-    const input = add.createEl("input", { cls: "desk-input", attr: { type: "text", placeholder: "Add task · 14:30 call Anna · remind 16:00 stretch · #docas" } });
+    const input = add.createEl("input", { cls: "desk-input", attr: { type: "text", placeholder: "Add a task for today", spellcheck: "false" } });
     const seg = add.createDiv("desk-seg is-small");
     for (const [k, label] of [["today", "Today"], ["later", "Later"]]) {
       const b = seg.createEl("button", { text: label, attr: { type: "button" } });
       if (this.target === k) b.addClass("is-on");
       b.addEventListener("click", () => { this.target = k; seg.querySelectorAll("button").forEach((x) => x.removeClass("is-on")); b.addClass("is-on"); input.focus(); });
     }
+    const chips = el.createDiv("desk-chips");
+    for (const p of this.data.projects.slice(0, 8)) {
+      const b = chips.createEl("button", { cls: "desk-btn is-chip" + (this.projTag === p.slug ? " is-on" : ""), text: p.title, attr: { type: "button" } });
+      b.addEventListener("click", () => { this.projTag = this.projTag === p.slug ? "" : p.slug; this.focusAdd = true; this.renderTasks(); });
+    }
     input.addEventListener("keydown", async (e) => {
       if (e.key !== "Enter" || !input.value.trim()) return;
-      const v = input.value;
+      let v = input.value.trim();
+      if (this.projTag && !v.toLowerCase().includes("#" + this.projTag)) v += " #" + this.projTag;
       input.value = "";
       await this.plugin.quickAdd(v, this.target);
     });
-    if (refocus) input.focus();
+    if (refocus || this.focusAdd) { this.focusAdd = false; input.focus(); }
 
-    const groups = [
-      ["overdue", "Overdue", T.overdue],
-      ["today", "Today", T.today],
-      ["upcoming", "Next 7 days", T.upcoming],
-      ["later", "Someday", T.later],
-    ];
+    const groups = [["today", "Today", T.today]];
     let any = false;
     for (const [key, label, list] of groups) {
       if (!list.length) continue;
@@ -742,7 +760,7 @@ class DeskView extends ItemView {
     else if (key === "overdue" && (t.scheduled || t.implied)) meta.createSpan({ cls: "desk-due is-late", text: "from " + relDay(t.scheduled || t.implied, today).replace(" late", " ago") });
     if (!t.isToday) meta.createSpan({ cls: "desk-src", text: t.file.basename });
     const acts = row.createDiv("desk-task-acts");
-    btn(acts, "calendar-plus", "Schedule next free hour", () => this.plugin.scheduleTask(t, this.plugin.freeSlot(60), 60), "is-icon");
+    btn(acts, "calendar-plus", "Plan", () => this.plugin.scheduleTask(t, this.plugin.freeSlot(60), 60), "is-soft");
     btn(acts, "arrow-up-right", "Open", () => this.plugin.openAt(t.file, t.line), "is-icon");
   }
 
@@ -775,13 +793,143 @@ class DeskView extends ItemView {
       const acts = card.createDiv("desk-proj-acts");
       btn(acts, "play", "Focus 45m", () => this.plugin.focusProject(p), "is-icon");
       btn(acts, "arrow-up-right", "Open", () => this.plugin.openProject(p.file), "is-icon");
-      card.addEventListener("click", () => this.plugin.openProject(p.file));
+      card.addEventListener("click", () => this.plugin.openOverview(p.file));
     }
   }
 
   }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms) => new Promise((r) => window.setTimeout(r, ms));
+
+class ProjectView extends ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.path = "";
+  }
+  getViewType() { return PROJ_VIEW; }
+  getDisplayText() { return this.title || "Project"; }
+  getIcon() { return "folder-kanban"; }
+  getState() { return { path: this.path }; }
+  async setState(state, result) {
+    this.path = state?.path || "";
+    await this.refresh();
+    return super.setState(state, result);
+  }
+  async onOpen() {
+    const root = this.contentEl;
+    root.empty();
+    root.addClass("desk");
+    root.addClass("is-project");
+    this.page = root.createDiv("desk-scroll").createDiv("desk-page");
+    await this.refresh();
+  }
+  async refresh() {
+    const el = this.page;
+    if (!el) return;
+    const file = this.path && this.app.vault.getAbstractFileByPath(this.path);
+    el.empty();
+    if (!(file instanceof TFile)) {
+      el.createDiv({ cls: "desk-empty", text: "No project open." });
+      return;
+    }
+    const text = await this.app.vault.cachedRead(file);
+    const fm = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
+    const title = fm.title || file.basename;
+    this.title = title;
+    const stages = parseTimeline(text);
+    const now = stages.find((s) => s.status === "now") || stages.find((s) => s.status === "later");
+    const goal = firstParagraph(text, "Goal");
+    const pitch = firstParagraph(text, "Pitch");
+    const slug = file.basename.toLowerCase().replace(/\s+/g, "-");
+    const data = this.plugin.latest && this.plugin.latest.today === M().format(ISO) ? this.plugin.latest : await this.plugin.collect();
+    const tasks = data.allOpen.filter((t) => t.tags.includes(slug) || t.file.path === file.path);
+
+    const hero = el.createDiv("desk-hero");
+    const bm = String(fm.banner || "").match(/\[\[([^\]|]+)/);
+    const bf = bm ? this.app.metadataCache.getFirstLinkpathDest(bm[1], file.path) : null;
+    if (bf) hero.style.setProperty("--desk-banner", `url("${this.app.vault.getResourcePath(bf)}")`);
+    const ht = hero.createDiv("desk-hero-text");
+    const top = ht.createDiv("desk-proj-nav");
+    btn(top, "arrow-left", "Desk", () => this.plugin.openDesk(), "is-soft");
+    btn(top, "file-text", "Note", () => this.plugin.openAt(file, 0), "is-ghost");
+    ht.createDiv({ cls: "desk-eyebrow", text: now ? "Now  ·  " + now.title : "Project" });
+    ht.createDiv({ cls: "desk-greet", text: title });
+    if (pitch) ht.createDiv({ cls: "desk-week", text: pitch });
+
+    const goalEl = el.createDiv("desk-goal");
+    goalEl.createDiv({ cls: "desk-label", text: "This project is done when" });
+    const ta = goalEl.createEl("textarea", { cls: "desk-goal-input", attr: { rows: 1, placeholder: "One sentence.", spellcheck: "false" } });
+    ta.value = goal;
+    autogrow(ta);
+    ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } });
+    ta.addEventListener("blur", () => {
+      const v = ta.value.replace(/\s+/g, " ").trim();
+      if (v !== goal) void this.plugin.setProjectGoal(file, v);
+    });
+
+    const grid = el.createDiv("desk-grid");
+    const stage = grid.createDiv("desk-card");
+    const sh = stage.createDiv("desk-card-head");
+    sh.createDiv({ cls: "desk-card-title", text: "Now" });
+    if (now?.date && now.date !== "open") sh.createDiv({ cls: "desk-card-meta", text: now.date });
+    if (!now) stage.createDiv({ cls: "desk-empty", text: "No current stage." });
+    else {
+      stage.createDiv({ cls: "desk-now-title is-ink", text: now.title });
+      if (now.doneWhen) stage.createDiv({ cls: "desk-duty-sub", text: now.doneWhen });
+      const you = (now.you || "").replace(/^—$/, "").trim();
+      if (you) {
+        stage.createDiv({ cls: "desk-label", text: "You" });
+        stage.createDiv({ cls: "desk-proj-you", text: you });
+      }
+      btn(stage, "play", "Plan 45 min", () => this.plugin.focusProject({ now: now.title, title, slug }), "is-soft");
+    }
+
+    const tasksEl = grid.createDiv("desk-card desk-tasks");
+    const th = tasksEl.createDiv("desk-card-head");
+    th.createDiv({ cls: "desk-card-title", text: "Tasks" });
+    th.createDiv({ cls: "desk-card-meta", text: tasks.length ? `${tasks.length} open` : "None yet" });
+    const add = tasksEl.createDiv("desk-add");
+    const input = add.createEl("input", { cls: "desk-input", attr: { type: "text", placeholder: "Add a task for today", spellcheck: "false" } });
+    const seg = add.createDiv("desk-seg is-small");
+    let when = "today";
+    for (const [k, label] of [["today", "Today"], ["later", "Later"]]) {
+      const b = seg.createEl("button", { text: label, attr: { type: "button" } });
+      if (k === when) b.addClass("is-on");
+      b.addEventListener("click", () => { when = k; seg.querySelectorAll("button").forEach((x) => x.removeClass("is-on")); b.addClass("is-on"); input.focus(); });
+    }
+    input.addEventListener("keydown", async (e) => {
+      if (e.key !== "Enter" || !input.value.trim()) return;
+      const v = input.value.trim();
+      input.value = "";
+      await this.plugin.addProjectTask(file, slug, v, when === "today");
+    });
+    if (!tasks.length) tasksEl.createDiv({ cls: "desk-empty", text: "Add the next thing. Today shows up on the desk." });
+    for (const t of tasks) {
+      const row = tasksEl.createDiv("desk-task");
+      row.style.setProperty("--c", tagColor(slug));
+      const chk = row.createEl("button", { cls: "desk-check", attr: { "aria-label": "Complete", type: "button" } });
+      chk.addEventListener("click", () => this.plugin.toggleTask(t));
+      const body = row.createDiv("desk-task-body");
+      body.createDiv({ cls: "desk-task-text", text: t.desc });
+      const meta = body.createDiv("desk-task-meta");
+      if (t.due) meta.createSpan({ cls: "desk-due", text: "due " + relDay(t.due, data.today) });
+      const acts = row.createDiv("desk-task-acts");
+      btn(acts, "calendar-plus", "Plan", () => this.plugin.scheduleTask(t, this.plugin.freeSlot(60), 60), "is-soft");
+    }
+  }
+}
+
+function firstParagraph(text, name) {
+  const g = section(text, name);
+  if (!g) return "";
+  for (const raw of text.slice(g.start, g.end).split("\n")) {
+    const s = raw.trim();
+    if (!s || s.startsWith(">") || s.startsWith("#") || s.startsWith("```") || s.startsWith("- ")) continue;
+    return s.replace(/\*\*|__|~~|`/g, "").replace(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g, "$1").replace(/\s+/g, " ").trim();
+  }
+  return "";
+}
 
 /* ================================================================ */
 
@@ -795,18 +943,25 @@ export class Desk {
     this.fired = new Set();
     this.firedDay = "";
     this.plugin.registerView(VIEW_TYPE, (leaf) => new DeskView(leaf, this));
+    this.plugin.registerView(PROJ_VIEW, (leaf) => new ProjectView(leaf, this));
     this.plugin.addRibbonIcon("sunrise", "Open desk", () => this.openDesk());
     this.plugin.addCommand({ id: "open-desk", name: "Open desk", callback: () => this.openDesk() });
 
-    const bump = () => { window.clearTimeout(this.t); this.t = window.setTimeout(() => this.views().forEach((v) => v.refresh()), 500); };
+    const bump = () => {
+      if (this.writing) return;
+      window.clearTimeout(this.t);
+      this.t = window.setTimeout(() => {
+        this.views().forEach((v) => v.refresh());
+        this.app.workspace.getLeavesOfType(PROJ_VIEW).forEach((l) => l.view?.refresh?.());
+      }, 500);
+    };
     this.plugin.registerEvent(this.app.metadataCache.on("changed", bump));
     this.plugin.registerEvent(this.app.vault.on("delete", bump));
     this.plugin.registerEvent(this.app.vault.on("rename", bump));
-    this.plugin.registerInterval(window.setInterval(() => this.remind(), 20000));
+    this.plugin.registerInterval(window.setInterval(() => { void this.remind(); }, 20000));
 
-    this.app.workspace.onLayoutReady(async () => {
-      await this.openDesk(true);
-      this.remind();
+    this.app.workspace.onLayoutReady(() => {
+      void this.openDesk(true).then(() => this.remind());
     });
   }
 
@@ -837,12 +992,40 @@ export class Desk {
     ws.setActiveLeaf(leaf, { focus: true });
   }
 
-  async openProject(file) {
-    const text = await this.app.vault.cachedRead(file);
-    const lines = text.split("\n");
-    let line = lines.findIndex((l) => /^## .+ · now —/.test(l));
-    if (line < 0) line = lines.findIndex((l) => l.trim() === "# Timeline");
-    await this.openAt(file, Math.max(0, line));
+  async openProject(file) { return this.openOverview(file); }
+
+  async openOverview(file) {
+    const ws = this.app.workspace;
+    let leaf = ws.getLeavesOfType(PROJ_VIEW)[0];
+    if (!leaf) leaf = ws.getLeaf("tab");
+    await leaf.setViewState({ type: PROJ_VIEW, active: true, state: { path: file.path } });
+    ws.revealLeaf(leaf);
+  }
+
+  async setProjectGoal(file, goal) {
+    await this.edit(file, (src) => {
+      const g = section(src, "Goal");
+      if (!g) return src.replace(/^(---\n[\s\S]*?\n---\n)?/, (fm) => `${fm}\n# Goal\n\n${goal}\n\n`);
+      const lines = src.slice(g.start, g.end).split("\n");
+      const i = lines.findIndex((l) => l.trim() && !l.trim().startsWith("```") && !l.trim().startsWith(">") && !l.trim().startsWith("- "));
+      if (i < 0) return src.slice(0, g.start) + `\n\n${goal}\n` + src.slice(g.end);
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() && !lines[j].startsWith("#")) j++;
+      lines.splice(i, j - i, goal);
+      return src.slice(0, g.start) + lines.join("\n") + src.slice(g.end);
+    });
+  }
+
+  async addProjectTask(file, slug, text, today) {
+    const line = `- [ ] ${text} #${slug}${today ? ` 📅 ${M().format(ISO)}` : ""}`;
+    await this.edit(file, (src) => {
+      const tasks = section(src, "Tasks");
+      if (tasks) return src.slice(0, tasks.end).replace(/\s*$/, "\n") + line + "\n" + src.slice(tasks.end);
+      const todos = section(src, "ToDos");
+      const block = `\n# Tasks\n\n${line}\n\n`;
+      if (todos) return src.slice(0, todos.head) + block + src.slice(todos.head);
+      return src.replace(/\s*$/, "\n" + block);
+    });
   }
 
   async openAt(file, line) {
@@ -870,8 +1053,10 @@ export class Desk {
   }
 
   async edit(file, fn) {
+    this.writing = true;
     try { await this.app.vault.process(file, fn); }
     catch (e) { new Notice(e.message || String(e)); }
+    finally { window.setTimeout(() => { this.writing = false; }, 1000); }
   }
 
   lineIndex(lines, i, raw) {
@@ -926,7 +1111,7 @@ export class Desk {
 
   async addBlock(start, end, text) {
     const f = await this.ensureDaily();
-    const line = `- [ ] ${fmt(start)} - ${fmt(end)} ${text}`;
+    const line = `- [ ] ${fmt(start)} - ${fmt(end)} ${text} 📅 ${M().format(ISO)}`;
     await this.edit(f, (src) => this.insertPlanner(src, line, start));
     this.nudge();
   }
@@ -1047,7 +1232,8 @@ export class Desk {
       return;
     }
     const f = await this.ensureDaily();
-    await this.edit(f, (src) => this.insertPlanner(src, `- [ ] ${s}`, null));
+    const today = M().format(ISO);
+    await this.edit(f, (src) => this.insertPlanner(src, `- [ ] ${s} 📅 ${today}`, null));
   }
 
   freeSlot(len) {
@@ -1067,17 +1253,62 @@ export class Desk {
     this.latestAt = 0;
   }
 
-  async ensureReflection(file, today, scan) {
-    const named = (s) => clean(s).toLowerCase() === "reflection";
-    if (scan.open.some((t) => named(t.body)) || scan.doneList.some((s) => s.toLowerCase() === "reflection")) return false;
-    const line = `- [ ] Reflection 🔁 every day 📅 ${today}`;
+  hasPhoto(text) {
+    return /!\[[^\]]*\]\([^)]+\.(?:png|jpe?g|gif|webp|heic)\)/i.test(text)
+      || /!\[\[[^\]]+\.(?:png|jpe?g|gif|webp|heic)(?:\|[^\]]*)?\]\]/i.test(text);
+  }
+
+  async ensureDayTasks(file, today, goalEmpty) {
+    const evening = new Date().getHours() >= (this.settings.reflectHour ?? 18);
+    const goalLine = `- [ ] Fill in today's goal and plan the day 📅 ${today}`;
+    const goalRe = /^- \[ \] Fill in today's goal and plan the day 📅 \d{4}-\d{2}-\d{2}\n?/m;
+    const reflectLine = `- [ ] Reflection 🔁 every day 📅 ${today}`;
+    const reflectRe = /^- \[ \] Reflection 🔁 every day 📅 \d{4}-\d{2}-\d{2}\n?/m;
+    const photoLine = `- [ ] Add a photo of today 📅 ${today}`;
+    const photoRe = /^- \[ \] Add a photo of today 📅 \d{4}-\d{2}-\d{2}\n?/m;
+    let changed = false;
     await this.edit(file, (text) => {
-      if (/^- \[[ xX]\] Reflection\b/m.test(text)) return text;
-      const r = section(text, "Reflection");
-      if (r) return text.slice(0, r.end).replace(/\s*$/, "\n") + line + "\n" + text.slice(r.end);
-      return text.replace(/\s*$/, `\n\n# Reflection\n\n${line}\n`);
+      let next = text;
+      if (goalEmpty) {
+        if (!goalRe.test(next)) {
+          const g = section(next, "Goal");
+          const line = goalLine + "\n";
+          next = g
+            ? next.slice(0, g.end).replace(/\s*$/, "\n") + line + next.slice(g.end)
+            : next.replace(/^(---\n[\s\S]*?\n---\n)?/, (fm) => `${fm}\n# Goal\n\n${line}\n`);
+          changed = true;
+        }
+      } else if (goalRe.test(next)) {
+        next = next.replace(goalRe, "");
+        changed = true;
+      }
+      if (!/^- \[[ xX]\] Add a photo of today\b/m.test(next)) {
+        const line = photoLine + "\n";
+        const p = section(next, "Photo");
+        next = p
+          ? next.slice(0, p.end).replace(/\s*$/, "\n") + line + next.slice(p.end)
+          : next.replace(/\s*$/, `\n\n# Photo\n\nOne photo from today. Drop it under this heading.\n\n${line}`);
+        changed = true;
+      } else if (this.hasPhoto(next) && photoRe.test(next)) {
+        next = next.replace(photoRe, `- [x] Add a photo of today 📅 ${today} ✅ ${today}\n`);
+        changed = true;
+      }
+      if (!evening) {
+        if (reflectRe.test(next)) {
+          next = next.replace(reflectRe, "");
+          changed = true;
+        }
+      } else if (!reflectRe.test(next) && !/^- \[[xX]\] Reflection\b/m.test(next)) {
+        const line = reflectLine + "\n";
+        const r = section(next, "Reflection");
+        next = r
+          ? next.slice(0, r.end).replace(/\s*$/, "\n") + line + next.slice(r.end)
+          : next.replace(/\s*$/, `\n\n# Reflection\n\n${line}`);
+        changed = true;
+      }
+      return changed ? next : text;
     });
-    return true;
+    return changed;
   }
 
   /* ---------- data ---------- */
@@ -1086,28 +1317,34 @@ export class Desk {
     const day = M();
     const today = day.format(ISO);
     const file = await this.ensureDaily(day);
-    let scan = await this.scanTasks(today, file.path);
-    if (!(await this.ensureReflection(file, today, scan))) {
-      /* already on the list */
-    } else {
-      scan = await this.scanTasks(today, file.path);
+    const dailyFirst = parseDaily(await this.app.vault.cachedRead(file));
+    const evening = new Date().getHours() >= (this.settings.reflectHour ?? 18);
+    if (await this.ensureDayTasks(file, today, !dailyFirst.goal)) {
+      /* tasks added or removed */
     }
-    const daily = parseDaily(await this.app.vault.cachedRead(file));
+    let scan = await this.scanTasks(today, file.path);
+    const note = await this.app.vault.cachedRead(file);
+    const daily = parseDaily(note);
     const events = await this.loadEvents(day);
     const planned = new Set(daily.blocks.map((b) => norm(b.text)));
-    const cutoff = day.clone().subtract(3, "days").format(ISO);
-    const week = day.clone().add(7, "days").format(ISO);
     const tasks = { overdue: [], today: [], upcoming: [], later: [] };
     for (const t of scan.open) {
       if (t.isToday && TIME_PREFIX.test(t.raw)) continue;
-      if (planned.has(norm(t.body))) continue;
-      const sched = t.scheduled || t.implied;
-      if ((t.due && t.due < today) || (t.scheduled && t.scheduled < today) || (!t.scheduled && t.implied && t.implied < today && t.implied >= cutoff)) tasks.overdue.push(t);
-      else if (t.due === today || sched === today || (t.start && t.start <= today && !t.due)) tasks.today.push(t);
-      else if (t.due && t.due <= week) tasks.upcoming.push(t);
-      else if (!t.due && !sched && t.indent === 0) tasks.later.push(t);
+      const name = clean(t.body).toLowerCase();
+      if (name === "reflection" && !evening) continue;
+      const duty = name === "reflection" || name === "fill in today's goal and plan the day";
+      if (!duty && planned.has(norm(t.body))) continue;
+      const sched = t.scheduled;
+      if (t.due === today || sched === today) tasks.today.push(t);
     }
-    const byUrg = (a, b) => b.prio - a.prio || (a.due || "9").localeCompare(b.due || "9");
+    const rank = (t) => {
+      const n = clean(t.body).toLowerCase();
+      if (n === "fill in today's goal and plan the day") return 0;
+      if (n === "add a photo of today") return 1;
+      if (n === "reflection") return 2;
+      return 2;
+    };
+    const byUrg = (a, b) => rank(a) - rank(b) || b.prio - a.prio || (a.due || "9").localeCompare(b.due || "9");
     Object.values(tasks).forEach((l) => l.sort(byUrg));
     tasks.later = tasks.later.slice(0, 30);
     const y = parseDaily(await this.readIf(dailyPath(day.clone().subtract(1, "day"))));
@@ -1116,6 +1353,9 @@ export class Desk {
       allOpen: scan.open,
       doneToday: scan.doneToday,
       doneList: scan.doneList,
+      evening,
+      photoDone: this.hasPhoto(note) || /^- \[[xX]\] Add a photo of today\b/m.test(note),
+      reflectDone: /^- \[[xX]\] Reflection\b/m.test(note),
       projects: await this.projects(scan.open, today),
       weekGoal: await this.weekGoal(day),
       yesterdayCarries: y.carries,
@@ -1275,11 +1515,11 @@ export class Desk {
 
   notify(title, body) {
     const n = new Notice(`${title} — ${body}`, 12000);
-    n.noticeEl?.addEventListener("click", () => this.openDesk());
+    n.noticeEl?.addEventListener("click", () => { void this.openDesk(); });
     try {
       if (!window.Notification) return;
       if (Notification.permission === "granted") new Notification(title, { body });
-      else if (Notification.permission === "default") Notification.requestPermission();
+      else if (Notification.permission === "default") void Notification.requestPermission();
     } catch (_) { /* no system notifications */ }
   }
 
@@ -1349,7 +1589,7 @@ function renderDeskSettings(el, plugin) {
     const num = (v) => Math.max(0, Math.min(23, parseInt(v, 10) || 0));
     text("Name", "Used in the greeting.", "name");
     new Setting(el).setName("Calendars (iCal)").setDesc("Secret iCal / webcal addresses, one per line. Google Calendar → Settings → your calendar → Secret address in iCal format.")
-      .addTextArea((t) => { t.setValue(s.icsUrls).onChange(async (v) => { s.icsUrls = v; await plugin.saveSettings(); }); t.inputEl.rows = 3; t.inputEl.style.width = "100%"; });
+      .addTextArea((t) => { t.setValue(s.icsUrls).onChange(async (v) => { s.icsUrls = v; await plugin.saveSettings(); }); t.inputEl.rows = 3; t.inputEl.setCssProps({ width: "100%" }); });
     text("Day starts", "Hour (0–23).", "startHour", num);
     text("Day ends", "Hour (0–23).", "endHour", num);
     text("Reflection hour", "From this hour the desk switches to evening mode.", "reflectHour", num);
@@ -1358,4 +1598,5 @@ function renderDeskSettings(el, plugin) {
     text("Backlog note", "Where 'Later' tasks go.", "backlog");
     new Setting(el).setName("Open on startup").addToggle((t) => t.setValue(s.openOnStartup).onChange(async (v) => { s.openOnStartup = v; await plugin.saveSettings(); }));
 }
+/* eslint-enable @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-argument, @typescript-eslint/no-unsafe-return -- end of desk view */
 

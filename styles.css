@@ -1070,7 +1070,7 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 
 .desk-hero {
   position: relative;
-  min-height: 250px;
+  min-height: 168px;
   border-radius: 28px;
   overflow: hidden;
   display: flex;
@@ -1211,17 +1211,21 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 /* ---------- goal ---------- */
 
 .desk-goal {
-  padding: 4px 6px 0;
+  padding: 16px 18px 14px;
+  border-radius: var(--d-radius);
+  background: var(--d-card);
+  border: 1px solid var(--d-line);
+  box-shadow: var(--d-shadow);
 }
 .desk-goal-input {
   all: unset;
   display: block;
   width: 100%;
-  margin-top: 6px;
+  margin-top: 4px;
   font-family: var(--d-serif);
-  font-size: clamp(22px, 2.6cqi, 30px);
+  font-size: clamp(22px, 2.4cqi, 28px);
   line-height: 1.25;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   color: var(--d-ink);
   resize: none;
   overflow: hidden;
@@ -1231,11 +1235,45 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 }
 .desk-goal-input::placeholder { color: var(--d-faint); font-style: italic; }
 .desk-goal:focus-within .desk-label { color: var(--d-accent); }
+.desk-day-status { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.desk-status {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  color: var(--d-mute);
+  background: color-mix(in srgb, var(--d-warm) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--d-warm) 35%, transparent);
+}
+.desk-status.is-done {
+  color: var(--d-ink);
+  background: color-mix(in srgb, var(--d-accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--d-accent) 35%, transparent);
+}
+.desk-status.is-open {
+  color: var(--d-ink);
+  background: color-mix(in srgb, var(--d-warm) 28%, transparent);
+}
 
 /* ---------- AI ---------- */
 
 .desk-ai { display: flex; flex-direction: column; gap: 10px; }
 .desk-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-left: 4px; }
+.desk-chips .desk-btn.is-on {
+  color: var(--d-ink);
+  border-color: color-mix(in srgb, var(--d-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--d-accent) 14%, transparent);
+}
+.desk-goal-plan { margin-top: 10px; }
+.desk-proj-nav { display: flex; gap: 8px; margin-bottom: 14px; }
+.desk.is-project .desk-grid { grid-template-columns: minmax(0, 1.15fr) minmax(220px, 0.85fr); }
+.desk.is-project .desk-hero .desk-btn {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+.desk.is-project .desk-now-title { color: var(--d-ink); margin-top: 0; }
+.desk.is-project .desk-card > .desk-btn { margin-top: 14px; }
 
 .desk-jarvis.vt-embed-host {
   border-radius: 26px;
@@ -1265,9 +1303,15 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 
 .desk-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(240px, 0.9fr) minmax(240px, 0.9fr);
-  gap: 16px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.9fr) minmax(220px, 0.9fr);
+  gap: 14px;
+  align-items: stretch;
+}
+.desk-tasks,
+.desk-projects {
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  scrollbar-width: thin;
 }
 .desk-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 

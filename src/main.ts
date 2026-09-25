@@ -154,17 +154,15 @@ export default class LMVoicePlugin extends Plugin {
     if (!leaf) {
       this.settings.dictateOpen = true;
       await this.saveSettings();
-      const ensure = (
-        workspace as typeof workspace & {
-          ensureSideLeaf?: (
-            type: string,
-            side: "left" | "right",
-            opts?: { active?: boolean; split?: boolean; reveal?: boolean }
-          ) => Promise<WorkspaceLeaf>;
-        }
-      ).ensureSideLeaf;
-      if (ensure) {
-        leaf = await ensure.call(workspace, DICTATE_VIEW, "right", { active: false, split: false, reveal: focus });
+      const ws = workspace as typeof workspace & {
+        ensureSideLeaf?: (
+          type: string,
+          side: "left" | "right",
+          opts?: { active?: boolean; split?: boolean; reveal?: boolean }
+        ) => Promise<WorkspaceLeaf>;
+      };
+      if (ws.ensureSideLeaf) {
+        leaf = await ws.ensureSideLeaf(DICTATE_VIEW, "right", { active: false, split: false, reveal: focus });
       } else {
         const right = workspace.getRightLeaf(false) || workspace.getLeaf("tab");
         leaf = right;

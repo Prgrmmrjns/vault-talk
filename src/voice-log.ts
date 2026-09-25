@@ -1,5 +1,6 @@
 import { mkdirSync, appendFileSync } from "fs";
 import { join } from "path";
+import { txt } from "./txt";
 
 const ID_OK = /^[a-z0-9]{4,64}$/;
 const AUDIO_TYPES = new Set([
@@ -26,7 +27,7 @@ function redact(v: unknown, depth = 0): unknown {
     const slice = v.slice(0, 50).map((x) => redact(x, depth + 1));
     return v.length > 50 ? [...slice, `…[${v.length}]`] : slice;
   }
-  if (typeof v !== "object") return String(v);
+  if (typeof v !== "object") return typeof v === "bigint" ? v.toString() : "";
   const o = v as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const [k, val] of Object.entries(o)) {
@@ -62,12 +63,12 @@ export class VoiceLogger {
   }
 
   client(event: Record<string, unknown>) {
-    if (AUDIO_TYPES.has(String(event.type || ""))) return;
+    if (AUDIO_TYPES.has(txt(event.type))) return;
     this.log("client", event);
   }
 
   server(event: Record<string, unknown>, extra: Record<string, unknown> = {}) {
-    if (AUDIO_TYPES.has(String(event.type || ""))) return;
+    if (AUDIO_TYPES.has(txt(event.type))) return;
     this.log("server", { ...event, ...extra });
   }
 

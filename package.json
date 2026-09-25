@@ -1,7 +1,7 @@
 {
   "name": "vault-talk",
-	"version": "1.4.1",
-  "description": "Vault Talk \u2014 Jarvis in Obsidian. Speak or type with Grok Voice; optionally edit markdown notes.",
+	"version": "1.4.2",
+  "description": "Vault Talk — Jarvis in Obsidian. Speak or type with Grok Voice; optionally edit markdown notes.",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -27,6 +27,8 @@
   "devDependencies": {
     "@types/node": "^22.15.17",
     "esbuild": "0.25.5",
+    "eslint": "^9.39.5",
+    "eslint-plugin-obsidianmd": "^0.4.2",
     "obsidian": "latest",
     "typescript": "^5.8.3"
   }

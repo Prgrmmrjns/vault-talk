@@ -1,6 +1,7 @@
 import { App, FileSystemAdapter, FileView, MarkdownView, TFile, normalizePath, requestUrl } from "obsidian";
 import { CursorVaultChat } from "./cursor-chat";
 import { ANTHROPIC_API, GEMINI_API, chatRoot, defaultChatModel, parseJson } from "./providers";
+import { txt } from "./txt";
 import type { LMVoiceSettings } from "./settings";
 
 export type ChatMsg = { role: "user" | "assistant" | "tool"; content: string; tool_call_id?: string };
@@ -414,11 +415,16 @@ export class VaultAgent {
       if (res.status >= 300) throw new Error(`LLM ${res.status}: ${(res.text || "").slice(0, 200)}`);
       const json = parseJson(res);
       const cands = json.candidates;
-      const first = Array.isArray(cands) ? cands[0] : null;
-      const parts =
-        first && typeof first === "object" && "content" in first
-          ? ((first as { content?: { parts?: Record<string, unknown>[] } }).content?.parts || [])
-          : [];
+      const first: unknown = Array.isArray(cands) ? cands[0] : null;
+      const parts: Record<string, unknown>[] = [];
+      if (first && typeof first === "object" && "content" in first) {
+        const content = (first as { content?: { parts?: unknown } }).content;
+        if (Array.isArray(content?.parts)) {
+          for (const part of content.parts) {
+            if (part && typeof part === "object") parts.push(part as Record<string, unknown>);
+          }
+        }
+      }
       const calls: { name: string; args: unknown }[] = [];
       let text = "";
       for (const p of parts) {
@@ -579,7 +585,7 @@ export class VaultAgent {
       if (view instanceof FileView && view.file?.path === file.path) found = leaf;
     });
     if (found) {
-      workspace.revealLeaf(found);
+      void workspace.revealLeaf(found);
       const label = this.noteLabel(file.path);
       if (file.extension === "md" && this.dailyJournal()?.path === file.path) {
         const body = (await this.app.vault.read(file)).replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 4000);
@@ -593,7 +599,7 @@ export class VaultAgent {
         ? recent
         : workspace.getLeaf("tab");
     await leaf.openFile(file);
-    workspace.revealLeaf(leaf);
+    void workspace.revealLeaf(leaf);
     const label = this.noteLabel(file.path);
     if (this.dailyJournal()?.path === file.path) {
       const body = (await this.app.vault.read(file)).replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 4000);
@@ -771,7 +777,7 @@ function messageText(content: unknown): string {
   return content
     .map((part) => {
       if (typeof part === "string") return part;
-      if (part && typeof part === "object" && "text" in part) return String((part as { text?: unknown }).text || "");
+      if (part && typeof part === "object" && "text" in part) return txt((part as { text?: unknown }).text);
       return "";
     })
     .join("");
@@ -784,7 +790,7 @@ function parseToolArgs(raw: string): Record<string, string> | null {
     const out: Record<string, string> = {};
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
       if (typeof val === "string") out[k] = val;
-      else if (val != null) out[k] = String(val);
+      else if (typeof val === "number" || typeof val === "boolean") out[k] = String(val);
     }
     return out;
   } catch {

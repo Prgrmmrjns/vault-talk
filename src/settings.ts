@@ -214,11 +214,6 @@ export class LMVoiceSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
-  display(): void {
-    super.display();
-    this.plugin.desk?.renderSettings(this.containerEl);
-  }
-
   private hotkeyItem(
     name: string,
     desc: string,
@@ -548,6 +543,14 @@ export class LMVoiceSettingTab extends PluginSettingTab {
             name: "Jarvis note",
             desc: "Prompt and behavior memory. Jarvis may add bullets under # Memory. Live open files, PDFs, and cursor are appended automatically. Default Jarvis.md.",
             control: { type: "text", key: "personalityFile", placeholder: "Jarvis.md" },
+          },
+          {
+            name: "Desk",
+            desc: "Day view on today’s note.",
+            render: (setting: Setting) => {
+              setting.settingEl.empty();
+              this.plugin.desk?.renderSettings(setting.settingEl);
+            },
           },
         ],
       },

@@ -1,6 +1,6 @@
 {
   "name": "vault-talk",
-	"version": "1.4.2",
+	"version": "1.4.3",
   "description": "Vault Talk — Jarvis in Obsidian. Speak or type with Grok Voice; optionally edit markdown notes.",
   "main": "main.js",
   "type": "module",
@@ -21,7 +21,9 @@
   "license": "MIT",
   "dependencies": {
     "@codemirror/state": "6.5.0",
-    "@codemirror/view": "6.38.6",
+    "@codemirror/view": "6.38.6"
+  },
+  "optionalDependencies": {
     "@cursor/sdk": "^1.0.28"
   },
   "devDependencies": {

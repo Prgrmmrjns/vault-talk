@@ -1,53 +1,45 @@
 # Vault Talk
 
-Talk to your [Obsidian](https://obsidian.md) vault. Speak or type; the agent can list, read, create, edit, or trash markdown notes — only the actions you allow.
+First-class [Cursor](https://cursor.com) in [Obsidian](https://obsidian.md). The desk is today’s note. Jarvis sits beside it and uses your Cursor models. A yes writes the vault, and the note updates in place.
 
-Chat can be [Mistral](https://mistral.ai), [Ollama](https://ollama.com), or [LM Studio](https://lmstudio.ai). Speech can be Mistral Voxtral or this computer.
+Voice is optional. The mic uses [Grok Voice](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech). With **Edit files** on, Jarvis can list, read, create, and edit markdown. It never deletes.
 
-![Vault Talk](screenshot.png)
+![Day](day_greeting.png)
 
-Desktop only (microphone).
+The desk: greeting, the current block, the goal, the hours, and today’s tasks.
+
+![Jarvis](chat_ui.png)
+
+The composer is the Cursor bar: attach a file, pick the model (Grok 4.7, Sonnet 5.5, Opus 5.5, and the rest of your account), set thinking and fast when that model has them, then talk or send. The plan stays in chat until you say it looks good. Then Cursor writes the goal and the blocks.
+
+Desktop only.
 
 ## How to use
 
-1. Install the plugin and enable it.
-2. Open **Settings → Vault Talk**.
-   - **Mistral chat or voice:** paste an API key from [console.mistral.ai](https://console.mistral.ai), or put `MISTRAL_API_KEY` in a vault `.env`.
-   - **Ollama:** start Ollama, pick **Chat → Ollama**, then a model (`llama3.2`, …). Default `http://127.0.0.1:11434/v1`.
-   - **LM Studio:** load a model, start the Developer server, pick **Chat → LM Studio**. Default `http://127.0.0.1:1234/v1`.
-3. Click the ribbon mic, or run **Open**.
-4. Tap the round **mic** button, talk, then pause. Type in the box if you prefer.
+1. Install the plugin and enable it. A Cursor API key is required for chat: [cursor.com/dashboard/api](https://cursor.com/dashboard/api), or `CURSOR_API_KEY` in a vault `.env`.
+2. The desk opens on startup (ribbon **sunrise**, or **Open desk**). The day is on the left. Jarvis is on the right.
+3. The composer lists the models on your Cursor account. Thinking and fast appear only when that model has them.
+4. **+** attaches a markdown, text, or PDF file to the next message.
+5. The mic starts voice. **Dictate** (Ctrl+D) types into the open note. Escape stops either.
 
-**Dictation** (settings toggle): speech to text only, no chat. Click a heading or place the cursor — the section highlights. **Fn** on Mac (set Globe key to Fn). Bind **Dictate into note** in Hotkeys. Pause when you’re done; the transcript lands in that section.
-
-Voice, accent, tools, and permissions live in **Settings → Vault Talk**.
-
-Settings also include: personality note (default `Personality.md`), system prompt, context notes, notes folder, active file only, and open after write.
-
-Delete is **off** by default. Internet is **off** by default.
+Tone and instructions live in vault `Jarvis.md` (`{{date}}`, `{{file}}`, `{{journal}}`, `{{tabs}}`).
 
 ## Privacy
 
-Mistral slots send audio or note text to `api.mistral.ai`. Ollama / LM Studio chat and “This computer” speech stay on your machine. Do not enable write/delete on vaults you would not trust with the chat provider you picked.
+Typed chat goes to Cursor. Voice uses the Talk provider you pick. Do not enable writes on a vault you would not trust with that provider.
 
 ## Commands
 
-- Open
-- Start talking
-- Stop talking
-- Dictate into note
+- Open Jarvis
+- Toggle dictation
 
 ## Development
 
 ```bash
 npm install
-npm run dev
+npm run build
 ```
 
-Reload the plugin in Obsidian after a rebuild.
+Symlink `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/vault-talk`.
 
-Release: bump `package.json` version, run `npm run version`, commit, tag `x.y.z` (no `v` prefix), and push the tag. GitHub Actions attaches `main.js`, `manifest.json`, and `styles.css`.
-
-## License
-
-MIT
+Releases are the plugin only: tag the plugin repo and GitHub attaches `main.js`, `manifest.json`, and `styles.css` for the [community listing](https://community.obsidian.md/plugins/vault-talk).

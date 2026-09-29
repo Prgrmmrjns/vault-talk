@@ -4,3 +4,7 @@ node_modules/
 .DS_Store
 *.js.map
 data.json
+.env
+.env.*
+.sdk-cache/
+.sdk-vendor/

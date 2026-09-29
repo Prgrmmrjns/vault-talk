@@ -1,9 +1,9 @@
 {
 	"id": "vault-talk",
 	"name": "Vault Talk",
-	"version": "1.4.7",
+	"version": "1.5.0",
 	"minAppVersion": "1.13.0",
-	"description": "Talk to your vault with Mistral, Ollama, or LM Studio. Speak or type, and optionally edit markdown notes.",
+	"description": "First-class Cursor in Obsidian. The desk is today's note. Jarvis uses your Cursor models and writes the vault.",
 	"author": "Jonas Wolber",
 	"authorUrl": "https://github.com/Prgrmmrjns",
 	"isDesktopOnly": true

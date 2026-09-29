@@ -843,7 +843,9 @@ class ProjectView extends ItemView {
     const pitch = firstParagraph(text, "Pitch");
     const slug = file.basename.toLowerCase().replace(/\s+/g, "-");
     const data = this.plugin.latest && this.plugin.latest.today === M().format(ISO) ? this.plugin.latest : await this.plugin.collect();
-    const tasks = data.allOpen.filter((t) => t.tags.includes(slug) || t.file.path === file.path);
+    const own = openTasksIn(text, file);
+    const seen = new Set(own.map((t) => norm(t.desc)));
+    const tasks = own.concat((data.allOpen || []).filter((t) => t.file.path !== file.path && t.tags.includes(slug) && !seen.has(norm(t.desc))));
 
     const hero = el.createDiv("desk-hero");
     const bm = String(fm.banner || "").match(/\[\[([^\]|]+)/);
@@ -902,8 +904,10 @@ class ProjectView extends ItemView {
       if (e.key !== "Enter" || !input.value.trim()) return;
       const v = input.value.trim();
       input.value = "";
+      this.refocusAdd = true;
       await this.plugin.addProjectTask(file, slug, v, when === "today");
     });
+    if (this.refocusAdd) { this.refocusAdd = false; input.focus(); }
     if (!tasks.length) tasksEl.createDiv({ cls: "desk-empty", text: "Add the next thing. Today shows up on the desk." });
     for (const t of tasks) {
       const row = tasksEl.createDiv("desk-task");
@@ -918,6 +922,22 @@ class ProjectView extends ItemView {
       btn(acts, "calendar-plus", "Plan", () => this.plugin.scheduleTask(t, this.plugin.freeSlot(60), 60), "is-soft");
     }
   }
+}
+
+function openTasksIn(text, file) {
+  const sec = section(text, "Tasks");
+  if (!sec) return [];
+  const before = text.slice(0, sec.start).split("\n").length - 1;
+  const out = [];
+  text.slice(sec.start, sec.end).split("\n").forEach((ln, i) => {
+    const m = ln.match(/^[-*+] \[ \] (.*)$/);
+    if (!m || !clean(m[1])) return;
+    out.push({
+      file, line: before + i, raw: ln, body: m[1], desc: clean(m[1]),
+      tags: tagsOf(m[1]), due: pickDate(m[1], "📅"),
+    });
+  });
+  return out;
 }
 
 function firstParagraph(text, name) {
@@ -955,6 +975,10 @@ export class Desk {
         this.app.workspace.getLeavesOfType(PROJ_VIEW).forEach((l) => l.view?.refresh?.());
       }, 500);
     };
+    this.plugin.registerMarkdownPostProcessor((el, ctx) => this.mountProjectAdd(el, ctx));
+    const paint = () => this.paintProjectAdds();
+    this.plugin.registerEvent(this.app.workspace.on("layout-change", paint));
+    this.plugin.registerEvent(this.app.workspace.on("active-leaf-change", paint));
     this.plugin.registerEvent(this.app.metadataCache.on("changed", bump));
     this.plugin.registerEvent(this.app.vault.on("delete", bump));
     this.plugin.registerEvent(this.app.vault.on("rename", bump));
@@ -1016,8 +1040,59 @@ export class Desk {
     });
   }
 
+  paintProjectAdds() {
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const file = leaf.view?.file;
+      if (!file || !/^Projects\/[^/]+\.md$/.test(file.path)) return;
+      const heading = leaf.view.containerEl?.querySelector('h1[data-heading="ToDos"]');
+      if (!heading) return;
+      this.mountProjectAdd(heading.closest(".el-h1") || heading, { sourcePath: file.path });
+    });
+  }
+
+  mountProjectAdd(el, ctx) {
+    if (!/^Projects\/[^/]+\.md$/.test(ctx.sourcePath || "")) return;
+    const heading = el.matches?.("h1") ? el : el.querySelector?.("h1");
+    if (!heading || (heading.getAttribute("data-heading") || heading.textContent || "").trim() !== "ToDos") return;
+    const host = heading.parentElement?.classList.contains("el-h1") ? heading.parentElement : heading;
+    if (host.parentElement?.querySelector(":scope > .pp-add")) return;
+    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+    if (!(file instanceof TFile)) return;
+    const slug = file.basename.toLowerCase().replace(/\s+/g, "-");
+    const box = host.createDiv("pp-add");
+    host.insertAdjacentElement("afterend", box);
+    const input = box.createEl("input", { attr: { type: "text", placeholder: "Add a task", spellcheck: "false" } });
+    let today = true;
+    const seg = box.createDiv("pp-add-when");
+    for (const [on, label] of [[true, "Today"], [false, "Later"]]) {
+      const b = seg.createEl("button", { text: label, attr: { type: "button" } });
+      if (on === today) b.addClass("is-on");
+      b.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        today = on;
+        seg.querySelectorAll("button").forEach((x) => x.removeClass("is-on"));
+        b.addClass("is-on");
+        input.focus();
+      });
+    }
+    const commit = async () => {
+      const v = input.value.trim();
+      if (!v) return;
+      input.value = "";
+      await this.addProjectTask(file, slug, v, today);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      e.stopPropagation();
+      void commit();
+    });
+  }
+
   async addProjectTask(file, slug, text, today) {
-    const line = `- [ ] ${text} #${slug}${today ? ` 📅 ${M().format(ISO)}` : ""}`;
+    const tagged = new RegExp("#" + slug + "\\b", "i").test(text) ? text : text + " #" + slug;
+    const line = `- [ ] ${tagged}${today ? ` 📅 ${M().format(ISO)}` : ""}`;
     await this.edit(file, (src) => {
       const tasks = section(src, "Tasks");
       if (tasks) return src.slice(0, tasks.end).replace(/\s*$/, "\n") + line + "\n" + src.slice(tasks.end);
@@ -1026,6 +1101,8 @@ export class Desk {
       if (todos) return src.slice(0, todos.head) + block + src.slice(todos.head);
       return src.replace(/\s*$/, "\n" + block);
     });
+    this.latestAt = 0;
+    await Promise.all(this.app.workspace.getLeavesOfType(PROJ_VIEW).map((l) => l.view?.refresh?.()));
   }
 
   async openAt(file, line) {

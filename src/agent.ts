@@ -1,20 +1,13 @@
-import { App, FileSystemAdapter, FileView, MarkdownView, TFile, normalizePath, requestUrl } from "obsidian";
-import { CursorVaultChat } from "./cursor-chat";
-import { ANTHROPIC_API, GEMINI_API, chatRoot, defaultChatModel, parseJson } from "./providers";
-import { txt } from "./txt";
+import { App, normalizePath, requestUrl } from "obsidian";
+import { chatHeaders, chatRoot, defaultChatModel, parseJson } from "./providers";
 import type { LMVoiceSettings } from "./settings";
 
 export type ChatMsg = { role: "user" | "assistant" | "tool"; content: string; tool_call_id?: string };
 
-export type AgentKeys = {
-  cursor: () => Promise<string>;
-  openai: () => Promise<string>;
-  google: () => Promise<string>;
-  mistral: () => Promise<string>;
-  anthropic: () => Promise<string>;
-};
-
 type ToolCall = { id: string; function: { name: string; arguments: string } };
+
+const CTX_PER_NOTE = 1200;
+const CTX_TOTAL = 2400;
 
 function tool(name: string, description: string, properties: Record<string, unknown>, required: string[]) {
   return {
@@ -30,18 +23,7 @@ function tool(name: string, description: string, properties: Record<string, unkn
 const TOOL_LIST = tool("list_files", "List markdown files in a vault folder.", {
   folder: { type: "string", description: "Vault-relative folder. Empty = vault root or the allowed folder." },
 }, []);
-const TOOL_OPEN = tool(
-  "open_file",
-  "Open a note in Obsidian. Call this once — do not glob, grep, shell, or read first. Path may be a vault path, filename, [[wikilink]], or 'today' / 'journal' for the daily journal.",
-  { path: { type: "string", description: "Vault path, filename, [[wikilink]], or today/journal." } },
-  ["path"]
-);
-const TOOL_READ = tool(
-  "read_file",
-  "Read a markdown note. Not for cursor or open tabs — those are already in the prompt. Path may be a vault path, filename, today/journal, or Jarvis.md for memory.",
-  { path: { type: "string", description: "Vault path, filename, today/journal, or Jarvis.md." } },
-  ["path"]
-);
+const TOOL_READ = tool("read_file", "Read a markdown note.", { path: { type: "string" } }, ["path"]);
 const TOOL_CREATE = tool("create_file", "Create a new markdown note. Fails if it exists.", {
   path: { type: "string" },
   content: { type: "string" },
@@ -55,228 +37,117 @@ const TOOL_PATCH = tool("patch_file", "Replace one exact substring in a markdown
   old: { type: "string" },
   new: { type: "string" },
 }, ["path", "old", "new"]);
+const TOOL_DELETE = tool("delete_file", "Move a markdown note to the Obsidian trash.", {
+  path: { type: "string" },
+}, ["path"]);
 const TOOL_FETCH = tool("fetch_url", "Fetch a public http(s) page and return plain text.", {
   url: { type: "string" },
 }, ["url"]);
 
-const FALLBACK_PROMPT = `You are Jarvis in Obsidian. One short spoken sentence. No vault paths, no .md names. Say “today’s journal”, the note title, or the PDF title.
-
-Call tools silently. If you need several, call the next before speaking. Never announce that you will look or edit. After the work, speak once.
-
-Open files, PDFs, and the writing cursor are already in the prompt. Do not read_file to find them.
-
-today / journal → path today. For the plan, read_file today. Markdown only for edits. Never delete.
-
-When they teach you how to behave, add a short bullet under # Memory in Jarvis.md (patch_file). Keep Memory short. Never delete the instructions above it.
-
-# Memory
-`;
+export function compactNote(src: string, max: number): string {
+  let t = src.replace(/^---[\s\S]*?---\s*/, "");
+  t = t.replace(/```[\s\S]*?```/g, " ");
+  t = t.replace(/!\[[^\]]*\]\([^)]+\)/g, " ");
+  t = t.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1");
+  t = t.replace(/\[\[[^\]|#/]+[|#]([^\]]+)\]\]/g, "$1");
+  t = t.replace(/\[\[([^\]|#]+)\]\]/g, "$1");
+  t = t.replace(/^#+\s+/gm, "");
+  t = t.replace(/^[>|*+-]+\s?/gm, "");
+  t = t.replace(/[`*_~]/g, "");
+  t = t.replace(/https?:\/\/\S+/g, "");
+  t = t.replace(/\n{2,}/g, "\n");
+  t = t.replace(/[ \t]+/g, " ");
+  return t.replace(/\s+\n/g, "\n").trim().slice(0, max);
+}
 
 export class VaultAgent {
-  private cursor: CursorVaultChat | null = null;
-  private lastMd: MarkdownView | null = null;
-  private lastFile: TFile | null = null;
-
   constructor(
     private app: App,
     private settings: () => LMVoiceSettings,
-    private keys: AgentKeys
+    private key: () => Promise<string>
   ) {}
 
-  resetCursor() {
-    this.cursor?.reset();
-    this.cursor = null;
-  }
-
   private canWrite(): boolean {
-    return this.settings().editFiles;
+    const s = this.settings();
+    return s.allowTools && !s.readOnly;
   }
 
   async systemText(): Promise<string> {
-    this.rememberFocus();
-    const live = this.liveLine();
-    const raw = ((await this.loadPersonality()) || FALLBACK_PROMPT)
-      .replaceAll("{{date}}", localDay())
-      .replaceAll("{{file}}", this.noteLabel(this.writingFile()?.path || "") || "(none)")
-      .replaceAll("{{journal}}", this.noteLabel(this.dailyJournal()?.path || "") || "(none)")
-      .replaceAll("{{tabs}}", this.openLabels() || "(none)")
-      .replaceAll("{{pdfs}}", this.openPdfs().map((p) => this.noteLabel(p)).join(", ") || "(none)")
-      .replaceAll("{{cursor}}", this.cursorLine());
-    return `${raw.trim()}\n\n${live}`.slice(0, 4500);
-  }
-
-  rememberFocus() {
-    const leaf = this.app.workspace.activeLeaf;
-    const view = leaf?.view;
-    if (!view) return;
-    const kind = view.getViewType();
-    if (kind.startsWith("vault-talk")) return;
-    if (view instanceof MarkdownView && view.file) {
-      this.lastMd = view;
-      this.lastFile = view.file;
-      return;
+    const s = this.settings();
+    const file = this.app.workspace.getActiveFile()?.path || "(none)";
+    const d = new Date().toISOString().slice(0, 10);
+    const caps: string[] = [];
+    if (!s.allowTools) caps.push("no tools (talk only)");
+    else {
+      if (s.allowList) caps.push("list");
+      if (s.allowRead) caps.push("read");
+      if (this.canWrite() && s.allowCreate) caps.push("create");
+      if (this.canWrite() && s.allowEdit) caps.push("edit");
+      if (this.canWrite() && s.allowDelete) caps.push("delete (trash)");
+      if (s.allowInternet) caps.push("fetch http(s)");
     }
-    if (view instanceof FileView && view.file) this.lastFile = view.file;
-  }
-
-  private liveLine(): string {
-    const writing = this.noteLabel(this.writingFile()?.path || "") || "(none)";
-    const focus = this.noteLabel(this.lastFile?.path || this.writingFile()?.path || "") || "(none)";
-    const pdfs = this.openPdfs().map((p) => this.noteLabel(p)).join(", ") || "(none)";
-    const tabs = this.openLabels() || "(none)";
-    return `Today: ${localDay()}. Focused: ${focus}. Writing: ${writing}. Cursor: ${this.cursorLine()}. PDFs: ${pdfs}. Open: ${tabs}. Journal: ${this.noteLabel(this.dailyJournal()?.path || "") || "(none)"}.`;
-  }
-
-  private writingFile(): TFile | null {
-    if (this.lastMd?.file) return this.lastMd.file;
-    return this.activeMarkdown();
-  }
-
-  private writingView(): MarkdownView | null {
-    if (this.lastMd?.file) return this.lastMd;
-    const cur = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (cur?.file) return cur;
-    const leaves = this.app.workspace.getLeavesOfType("markdown");
-    for (let i = leaves.length - 1; i >= 0; i--) {
-      const view = leaves[i]?.view;
-      if (view instanceof MarkdownView && view.file) return view;
-    }
-    return null;
-  }
-
-  private cursorLine(): string {
-    const view = this.writingView();
-    if (!view?.file) return "(none)";
-    const ed = view.editor;
-    if (!ed || view.getMode?.() === "preview") return `${this.noteLabel(view.file.path)}, reading`;
-    const pos = ed.getCursor();
-    const lineNo = pos.line + 1;
-    let heading = "";
-    for (let i = pos.line; i >= 0; i--) {
-      const m = ed.getLine(i).match(/^(#{1,6})\s+(.+)/);
-      if (m?.[2]) {
-        heading = m[2].trim();
-        break;
-      }
-    }
-    const snippet = ed.getLine(pos.line).trim().slice(0, 80);
-    const bits = [`line ${lineNo}`];
-    if (heading) bits.push(`heading ${heading}`);
-    if (snippet) bits.push(`“${snippet}”`);
-    return bits.join(", ");
-  }
-
-  private openFiles(): TFile[] {
-    const out: TFile[] = [];
-    const seen = new Set<string>();
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      const view = leaf.view;
-      if (view.getViewType().startsWith("vault-talk")) return;
-      if (!(view instanceof FileView) || !view.file) return;
-      if (seen.has(view.file.path)) return;
-      seen.add(view.file.path);
-      out.push(view.file);
-    });
-    return out.slice(0, 12);
-  }
-
-  private openPdfs(): string[] {
-    return this.openFiles()
-      .filter((f) => f.extension.toLowerCase() === "pdf")
-      .map((f) => f.path);
-  }
-
-  private openLabels(): string {
-    return this.openFiles()
-      .map((f) => this.noteLabel(f.path))
-      .join(", ");
-  }
-
-  activeMarkdown(): TFile | null {
-    const cur = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (cur?.file) return cur.file;
-    const leaves = this.app.workspace.getLeavesOfType("markdown");
-    for (let i = leaves.length - 1; i >= 0; i--) {
-      const view = leaves[i]?.view;
-      if (view instanceof MarkdownView && view.file) return view.file;
-    }
-    return null;
-  }
-
-  openMarkdown(): string[] {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    for (const leaf of this.app.workspace.getLeavesOfType("markdown")) {
-      const view = leaf.view;
-      if (!(view instanceof MarkdownView) || !view.file) continue;
-      if (seen.has(view.file.path)) continue;
-      seen.add(view.file.path);
-      out.push(view.file.path);
-    }
-    return out.slice(0, 8);
-  }
-
-  private personalityFile(): TFile | null {
-    const raw = (this.settings().personalityFile || "Jarvis.md").trim();
-    if (!raw) return null;
-    const path = normalizePath(raw.replace(/^\[\[|\]\]$/g, ""));
-    return this.app.vault.getFileByPath(path.endsWith(".md") ? path : `${path}.md`) || this.app.vault.getFileByPath(path);
+    if (s.readOnly) caps.push("read-only");
+    if (s.activeFileOnly) caps.push("active file only");
+    const scope = s.notesFolder ? `Only inside folder: ${normalizePath(s.notesFolder)}.` : "Whole vault.";
+    const extra = `\nYou may ${caps.join(", ") || "not change files"}. ${scope}`;
+    const persona = await this.loadPersonality();
+    const ctx = await this.loadContextNotes();
+    return s.systemPrompt.replaceAll("{{date}}", d).replaceAll("{{file}}", file) + extra + persona + ctx;
   }
 
   private async loadPersonality(): Promise<string> {
-    const file = this.personalityFile();
+    const raw = (this.settings().personalityFile || "Personality.md").trim();
+    if (!raw) return "";
+    const path = normalizePath(raw.replace(/^\[\[|\]\]$/g, ""));
+    const file =
+      this.app.vault.getFileByPath(path.endsWith(".md") ? path : `${path}.md`) || this.app.vault.getFileByPath(path);
     if (!file) return "";
-    return (await this.app.vault.read(file)).replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 3500);
+    const body = (await this.app.vault.read(file)).replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 2000);
+    return body ? `\n\nPersonality:\n${body}` : "";
+  }
+
+  private async loadContextNotes(): Promise<string> {
+    const raw = this.settings().contextNotes || "";
+    const paths = raw
+      .split(/[\n,]/)
+      .map((p) => normalizePath(p.trim().replace(/^\[\[|\]\]$/g, "")))
+      .filter(Boolean)
+      .slice(0, 6);
+    if (!paths.length) return "";
+    const chunks: string[] = [];
+    let used = 0;
+    for (const path of paths) {
+      const file = this.app.vault.getFileByPath(path.endsWith(".md") ? path : `${path}.md`) || this.app.vault.getFileByPath(path);
+      if (!file) continue;
+      const room = Math.min(CTX_PER_NOTE, CTX_TOTAL - used);
+      if (room < 80) break;
+      const compact = compactNote(await this.app.vault.read(file), room);
+      if (!compact) continue;
+      chunks.push(`\n[${file.path}]\n${compact}`);
+      used += compact.length;
+    }
+    return chunks.length ? `\n\nContext notes (compact):${chunks.join("\n")}` : "";
   }
 
   private tools() {
     const s = this.settings();
-    const out = [TOOL_OPEN, TOOL_READ, TOOL_LIST];
-    if (s.editFiles) out.push(TOOL_CREATE, TOOL_EDIT, TOOL_PATCH);
+    if (!s.allowTools) return [];
+    const out = [];
+    if (s.allowList && !s.activeFileOnly) out.push(TOOL_LIST);
+    if (s.allowRead) out.push(TOOL_READ);
+    if (this.canWrite() && s.allowCreate && !s.activeFileOnly) out.push(TOOL_CREATE);
+    if (this.canWrite() && s.allowEdit) out.push(TOOL_EDIT, TOOL_PATCH);
+    if (this.canWrite() && s.allowDelete && !s.activeFileOnly) out.push(TOOL_DELETE);
     if (s.allowInternet) out.push(TOOL_FETCH);
     return out;
   }
 
-  grokTools() {
-    return this.tools().map((t) => ({
-      type: "function" as const,
-      name: t.function.name,
-      description: t.function.description,
-      parameters: t.function.parameters,
-    }));
-  }
-
-  async callTool(name: string, rawArgs: string, onTool: (name: string, detail: string) => void): Promise<string> {
-    return this.exec({ id: "grok", function: { name, arguments: rawArgs } }, onTool);
-  }
-
   async run(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
-    const s = this.settings();
-    const last = [...history].reverse().find((m) => m.role === "user");
-    const target = last ? openTarget(last.content) : null;
-    if (target) {
-      try {
-        const out = await this.openNote(target);
-        onTool("open_file", out);
-        return out;
-      } catch {
-        /* let the model find it */
-      }
-    }
-    if (s.chatProvider === "cursor") return this.runCursor(history, onTool);
-    if (s.chatProvider === "anthropic") return this.runAnthropic(history, onTool);
-    if (s.chatProvider === "google") return this.runGemini(history, onTool);
-    this.resetCursor();
-    return this.runOpenAI(history, onTool);
-  }
-
-  private async runOpenAI(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
     const s = this.settings();
     const model = s.llmModel || defaultChatModel(s.chatProvider);
     if (!model) throw new Error("Pick a chat model in settings.");
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (s.chatProvider === "openai") headers.Authorization = "Bearer " + (await this.keys.openai());
-    if (s.chatProvider === "mistral") headers.Authorization = "Bearer " + (await this.keys.mistral());
+    const key = s.chatProvider === "mistral" ? await this.key() : "";
+    const headers = chatHeaders(s, key);
     const messages: Record<string, unknown>[] = [{ role: "system", content: await this.systemText() }, ...history];
     const tools = this.tools();
     let spoken = "";
@@ -322,143 +193,6 @@ export class VaultAgent {
     return spoken.trim();
   }
 
-  private async runAnthropic(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
-    const s = this.settings();
-    const model = s.llmModel || defaultChatModel("anthropic");
-    const key = await this.keys.anthropic();
-    const tools = this.tools().map((t) => ({
-      name: t.function.name,
-      description: t.function.description,
-      input_schema: t.function.parameters,
-    }));
-    const messages: Record<string, unknown>[] = history
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: m.role, content: m.content }));
-    let spoken = "";
-    for (let hop = 0; hop < 8; hop++) {
-      const res = await requestUrl({
-        url: `${ANTHROPIC_API}/messages`,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": key,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 1024,
-          temperature: 0.3,
-          system: await this.systemText(),
-          messages,
-          tools: tools.length ? tools : undefined,
-        }),
-        throw: false,
-      });
-      if (res.status >= 300) throw new Error(`LLM ${res.status}: ${(res.text || "").slice(0, 200)}`);
-      const json = parseJson(res);
-      const content = Array.isArray(json.content) ? json.content : [];
-      const uses: { id: string; name: string; input: unknown }[] = [];
-      let text = "";
-      for (const raw of content) {
-        if (!raw || typeof raw !== "object") continue;
-        const p = raw as { type?: string; text?: string; id?: string; name?: string; input?: unknown };
-        if (p.type === "text") text += p.text || "";
-        if (p.type === "tool_use") uses.push({ id: String(p.id || ""), name: String(p.name || ""), input: p.input });
-      }
-      if (!uses.length) {
-        spoken = text || spoken;
-        break;
-      }
-      messages.push({ role: "assistant", content });
-      const results: Record<string, unknown>[] = [];
-      for (const u of uses) {
-        const result = await this.exec(
-          { id: u.id, function: { name: u.name, arguments: JSON.stringify(u.input ?? {}) } },
-          onTool
-        );
-        results.push({ type: "tool_result", tool_use_id: u.id, content: result });
-      }
-      messages.push({ role: "user", content: results });
-    }
-    return spoken.trim();
-  }
-
-  private async runGemini(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
-    const s = this.settings();
-    const model = s.llmModel || defaultChatModel("google");
-    const key = await this.keys.google();
-    const decls = this.grokTools().map((t) => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.parameters,
-    }));
-    const contents: Record<string, unknown>[] = history
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }],
-      }));
-    let spoken = "";
-    for (let hop = 0; hop < 8; hop++) {
-      const res = await requestUrl({
-        url: `${GEMINI_API}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`,
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: await this.systemText() }] },
-          contents,
-          generationConfig: { temperature: 0.3 },
-          tools: decls.length ? [{ functionDeclarations: decls }] : undefined,
-        }),
-        throw: false,
-      });
-      if (res.status >= 300) throw new Error(`LLM ${res.status}: ${(res.text || "").slice(0, 200)}`);
-      const json = parseJson(res);
-      const cands = json.candidates;
-      const first: unknown = Array.isArray(cands) ? cands[0] : null;
-      const parts: Record<string, unknown>[] = [];
-      if (first && typeof first === "object" && "content" in first) {
-        const content = (first as { content?: { parts?: unknown } }).content;
-        if (Array.isArray(content?.parts)) {
-          for (const part of content.parts) {
-            if (part && typeof part === "object") parts.push(part as Record<string, unknown>);
-          }
-        }
-      }
-      const calls: { name: string; args: unknown }[] = [];
-      let text = "";
-      for (const p of parts) {
-        if (typeof p.text === "string") text += p.text;
-        const fc = p.functionCall as { name?: string; args?: unknown } | undefined;
-        if (fc?.name) calls.push({ name: fc.name, args: fc.args });
-      }
-      contents.push({ role: "model", parts });
-      if (!calls.length) {
-        spoken = text || spoken;
-        break;
-      }
-      const responses: Record<string, unknown>[] = [];
-      for (const c of calls) {
-        const result = await this.exec(
-          { id: c.name, function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) } },
-          onTool
-        );
-        responses.push({ functionResponse: { name: c.name, response: { result } } });
-      }
-      contents.push({ role: "user", parts: responses });
-    }
-    return spoken.trim();
-  }
-
-  private async runCursor(history: ChatMsg[], onTool: (name: string, detail: string) => void): Promise<string> {
-    if (!this.cursor) {
-      this.cursor = new CursorVaultChat(this.app, this.keys.cursor, this.settings);
-    }
-    const last = [...history].reverse().find((m) => m.role === "user");
-    if (!last) return "";
-    return this.cursor.send(last.content, await this.systemText(), onTool);
-  }
-
   private async exec(call: ToolCall, onTool: (name: string, detail: string) => void): Promise<string> {
     const args = parseToolArgs(call.function.arguments);
     if (args == null) return `Bad arguments: ${call.function.arguments}`;
@@ -479,6 +213,11 @@ export class VaultAgent {
   }
 
   private inScope(path: string): boolean {
+    const s = this.settings();
+    if (s.activeFileOnly) {
+      const cur = this.app.workspace.getActiveFile()?.path;
+      return !!cur && path === cur;
+    }
     const folder = this.allowedFolder();
     if (!folder) return true;
     return path === folder || path.startsWith(folder + "/");
@@ -502,122 +241,9 @@ export class VaultAgent {
     }
   }
 
-  private dailyJournal(): TFile | null {
-    const d = new Date();
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    const iso = `${yyyy}-${mm}-${dd}`;
-    const dayFile = `${dd}-${mm}-${yyyy}.md`;
-    const month = d.toLocaleString("en-US", { month: "long" });
-    const paths = [
-      `Journal/${yyyy}/${month}/${dayFile}`,
-      `Journal/${yyyy}/${yyyy}-${mm}/${dayFile}`,
-      `Journal/${yyyy}/${dayFile}`,
-      `Journal/${iso}.md`,
-      `Journal/${dayFile}`,
-    ];
-    for (const p of paths) {
-      const f = this.app.vault.getFileByPath(p);
-      if (f && this.inScope(f.path)) return f;
-    }
-    for (const f of this.app.vault.getMarkdownFiles()) {
-      if (!this.inScope(f.path)) continue;
-      if (f.name === dayFile && f.path.startsWith("Journal/")) return f;
-      const fm = this.app.metadataCache.getFileCache(f)?.frontmatter;
-      if (!fm) continue;
-      const type = String(fm.type || "").toLowerCase();
-      const date = String(fm.date || "").slice(0, 10);
-      if (date === iso && (type === "daily" || type === "journal")) return f;
-    }
-    return null;
-  }
-
-  private resolveOpen(raw: string): TFile {
-    const cleaned = (raw || "").replace(/^\[\[|\]\]$/g, "").trim().replace(/\\/g, "/");
-    if (!cleaned || cleaned.split("/").includes("..")) throw new Error(`Blocked path: ${raw}`);
-    if (journalAlias(cleaned)) {
-      const j = this.dailyJournal();
-      if (j) return j;
-      throw new Error("Today's journal is missing");
-    }
-    if (memoryAlias(cleaned)) {
-      const mem = this.personalityFile();
-      if (mem) return mem;
-      throw new Error("Jarvis.md is missing");
-    }
-    let p = cleaned;
-    const ad = this.app.vault.adapter;
-    if (ad instanceof FileSystemAdapter) {
-      const root = ad.getBasePath().replace(/\\/g, "/");
-      const full = p.startsWith("file://") ? decodeURIComponent(p.slice(7)) : p;
-      if (full === root || full.startsWith(root + "/")) p = full.slice(root.length).replace(/^\/+/, "");
-    }
-    p = normalizePath(p);
-    const folder = this.allowedFolder();
-    const active = this.app.workspace.getActiveFile()?.path || "";
-    const linkName = p.replace(/\.md$/i, "");
-    const link =
-      this.app.metadataCache.getFirstLinkpathDest(linkName, active) ||
-      this.app.metadataCache.getFirstLinkpathDest(cleaned, active);
-    const tries = [p];
-    if (!/\.[a-z0-9]+$/i.test(p)) tries.push(`${p}.md`, `${p}.pdf`);
-    if (folder) {
-      tries.push(normalizePath(`${folder}/${p}`));
-      if (!p.toLowerCase().endsWith(".md")) tries.push(normalizePath(`${folder}/${p}.md`));
-    }
-    const file =
-      (link && this.inScope(link.path) ? link : null) ||
-      tries.map((t) => this.app.vault.getFileByPath(t)).find((f): f is TFile => !!f) ||
-      null;
-    if (!file) throw new Error(`Missing: ${p}`);
-    if (!this.inScope(file.path)) throw new Error(`Outside allowed scope: ${file.path}`);
-    return file;
-  }
-
-  private async openNote(raw: string): Promise<string> {
-    const file = this.resolveOpen(raw);
-    const { workspace } = this.app;
-    let found: ReturnType<typeof workspace.getLeaf> | null = null;
-    workspace.iterateAllLeaves((leaf) => {
-      if (found) return;
-      const view = leaf.view;
-      if (view instanceof FileView && view.file?.path === file.path) found = leaf;
-    });
-    if (found) {
-      void workspace.revealLeaf(found);
-      const label = this.noteLabel(file.path);
-      if (file.extension === "md" && this.dailyJournal()?.path === file.path) {
-        const body = (await this.app.vault.read(file)).replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 4000);
-        return `Opened ${label}\n${body}`;
-      }
-      return `Opened ${label}`;
-    }
-    const recent = workspace.getMostRecentLeaf();
-    const leaf =
-      recent && recent.view.getViewType() !== "vault-talk-view" && recent.view.getViewType() !== "vault-talk-dictate"
-        ? recent
-        : workspace.getLeaf("tab");
-    await leaf.openFile(file);
-    void workspace.revealLeaf(leaf);
-    const label = this.noteLabel(file.path);
-    if (this.dailyJournal()?.path === file.path) {
-      const body = (await this.app.vault.read(file)).replace(/^---[\s\S]*?---\s*/, "").trim().slice(0, 4000);
-      return `Opened ${label}\n${body}`;
-    }
-    return `Opened ${label}`;
-  }
-
-  private noteLabel(path: string): string {
-    const journal = this.dailyJournal()?.path;
-    if (journal && path === journal) return "today's journal";
-    const base = path.split("/").pop() || path;
-    return base.replace(/\.(md|pdf)$/i, "");
-  }
-
   private async afterWrite(path: string) {
     if (!this.settings().openAfterWrite) return;
-    await this.openNote(path);
+    await this.app.workspace.openLinkText(path, "", false);
   }
 
   private htmlText(html: string): string {
@@ -636,6 +262,7 @@ export class VaultAgent {
 
   private async dispatch(name: string, args: Record<string, string>): Promise<string> {
     const s = this.settings();
+    if (!s.allowTools) throw new Error("Tool calls are disabled");
     if (name === "fetch_url") {
       if (!s.allowInternet) throw new Error("Internet is disabled");
       const url = (args.url || "").trim();
@@ -646,12 +273,12 @@ export class VaultAgent {
       const text = raw.includes("<") ? this.htmlText(raw) : raw.slice(0, 4000);
       return text || "(empty)";
     }
-    if (name === "open_file") return this.openNote(args.path || "");
-    if (name === "read_file" || name === "edit_file" || name === "patch_file") {
-      const file = this.resolveOpen(args.path || "");
-      args = { ...args, path: file.path };
-    }
     if (name === "list_files") {
+      if (!s.allowList) throw new Error("Listing notes is disabled");
+      if (s.activeFileOnly) {
+        const cur = this.app.workspace.getActiveFile()?.path;
+        return cur || "(no active file)";
+      }
       const folder = normalizePath(args.folder || this.allowedFolder() || "");
       if (folder.split("/").includes("..")) throw new Error("Blocked path");
       const cap = this.allowedFolder();
@@ -668,28 +295,29 @@ export class VaultAgent {
     }
     const path = this.safeMd(args.path || "");
     if (name === "read_file") {
+      if (!s.allowRead) throw new Error("Reading notes is disabled");
       const file = this.app.vault.getFileByPath(path);
       if (!file) throw new Error(`Missing: ${path}`);
       return (await this.app.vault.read(file)).slice(0, 12000);
     }
     if (name === "create_file") {
-      if (!this.canWrite()) throw new Error("Editing files is off");
+      if (!this.canWrite() || !s.allowCreate) throw new Error("Creating notes is disabled");
       if (this.app.vault.getAbstractFileByPath(path)) throw new Error(`Exists: ${path}`);
       await this.ensureParent(path);
       await this.app.vault.create(path, args.content || "");
       await this.afterWrite(path);
-      return `Created ${this.noteLabel(path)}`;
+      return `Created ${path}`;
     }
     if (name === "edit_file") {
-      if (!this.canWrite()) throw new Error("Editing files is off");
+      if (!this.canWrite() || !s.allowEdit) throw new Error("Editing notes is disabled");
       const file = this.app.vault.getFileByPath(path);
       if (!file) throw new Error(`Missing: ${path}`);
       await this.app.vault.process(file, () => args.content || "");
       await this.afterWrite(path);
-      return `Wrote ${this.noteLabel(path)}`;
+      return `Wrote ${path}`;
     }
     if (name === "patch_file") {
-      if (!this.canWrite()) throw new Error("Editing files is off");
+      if (!this.canWrite() || !s.allowEdit) throw new Error("Editing notes is disabled");
       const file = this.app.vault.getFileByPath(path);
       if (!file) throw new Error(`Missing: ${path}`);
       const old = args.old || "";
@@ -698,56 +326,17 @@ export class VaultAgent {
         return text.replace(old, args.new || "");
       });
       await this.afterWrite(path);
-      return `Patched ${this.noteLabel(path)}`;
+      return `Patched ${path}`;
+    }
+    if (name === "delete_file") {
+      if (!this.canWrite() || !s.allowDelete) throw new Error("Deleting notes is disabled");
+      const file = this.app.vault.getFileByPath(path);
+      if (!file) throw new Error(`Missing: ${path}`);
+      await this.app.fileManager.trashFile(file);
+      return `Trashed ${path}`;
     }
     throw new Error(`Unknown tool: ${name}`);
   }
-}
-
-function localDay(d = new Date()): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function memoryAlias(raw: string): boolean {
-  const t = raw
-    .toLowerCase()
-    .replace(/['’]/g, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-  return t === "memory" || t === "jarvis" || t === "jarvis md" || t === "personality";
-}
-
-function journalAlias(raw: string): boolean {
-  const t = raw
-    .toLowerCase()
-    .replace(/['’]/g, "")
-    .replace(/\b(the|my|our|a|an|note|file|page|entry)\b/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return (
-    t === "today" ||
-    t === "journal" ||
-    t === "daily" ||
-    t === "daily journal" ||
-    t === "today journal" ||
-    t === "todays journal" ||
-    t === "today daily" ||
-    t === "today daily journal" ||
-    t === "todays daily journal" ||
-    t.endsWith("daily journal")
-  );
-}
-
-function openTarget(text: string): string | null {
-  const t = text.trim().replace(/[?!.,]+$/g, "");
-  const m = t.match(/^(please\s+)?(open|show(?:\s+me)?|go\s+to|look\s+at)\s+(.+)$/i);
-  if (!m) return null;
-  const rest = (m[3] || "").replace(/^(the|my|our)\s+/i, "").trim();
-  if (!rest) return null;
-  if (/\b(and|then)\b/i.test(rest)) return null;
-  if (/\b(add|write|edit|append|update|fill|create|delete|patch)\b/i.test(rest)) return null;
-  return rest;
 }
 
 function isToolCall(v: unknown): v is ToolCall {
@@ -777,7 +366,7 @@ function messageText(content: unknown): string {
   return content
     .map((part) => {
       if (typeof part === "string") return part;
-      if (part && typeof part === "object" && "text" in part) return txt((part as { text?: unknown }).text);
+      if (part && typeof part === "object" && "text" in part) return String((part as { text?: unknown }).text || "");
       return "";
     })
     .join("");
@@ -790,7 +379,7 @@ function parseToolArgs(raw: string): Record<string, string> | null {
     const out: Record<string, string> = {};
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
       if (typeof val === "string") out[k] = val;
-      else if (typeof val === "number" || typeof val === "boolean") out[k] = String(val);
+      else if (val != null) out[k] = String(val);
     }
     return out;
   } catch {

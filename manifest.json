@@ -1,9 +1,9 @@
 {
 	"id": "vault-talk",
 	"name": "Vault Talk",
-	"version": "1.4.6",
+	"version": "1.4.7",
 	"minAppVersion": "1.13.0",
-	"description": "Desk and Jarvis in one plugin. Day view over today's note; talk with Grok, ChatGPT, or Google Live.",
+	"description": "Talk to your vault with Mistral, Ollama, or LM Studio. Speak or type, and optionally edit markdown notes.",
 	"author": "Jonas Wolber",
 	"authorUrl": "https://github.com/Prgrmmrjns",
 	"isDesktopOnly": true

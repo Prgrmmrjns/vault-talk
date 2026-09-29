@@ -13,11 +13,7 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "allowSyntheticDefaultImports": true,
-    "lib": ["ES2021", "DOM"],
-    "baseUrl": ".",
-    "paths": {
-      "@cursor/sdk": ["src/types/cursor-sdk.ts"]
-    }
+    "lib": ["ES2021", "DOM"]
   },
   "include": ["src"]
 }

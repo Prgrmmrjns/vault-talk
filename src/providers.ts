@@ -1,96 +1,59 @@
 import { requestUrl } from "obsidian";
 import type { LMVoiceSettings } from "./settings";
-import {
-  ANTHROPIC_CHAT_MODELS,
-  CURSOR_MODELS,
-  GEMINI_CHAT_MODELS,
-  MISTRAL_CHAT_MODELS,
-  OPENAI_CHAT_MODELS,
-  type VoiceOption,
-} from "./voices";
 
-export type ChatProvider = "cursor" | "ollama" | "openai" | "anthropic" | "google" | "mistral";
-export type SttProvider = "grok" | "openai" | "google" | "whisper" | "mistral";
-export type TtsProvider = "grok" | "openai" | "google" | "kokoro" | "mistral";
-/** @deprecated use SttProvider / TtsProvider */
-export type SpeechProvider = SttProvider | TtsProvider;
+export type ChatProvider = "mistral" | "ollama" | "lmstudio";
+export type SpeechProvider = "mistral" | "browser";
 
 export const CHAT_PROVIDERS: { id: ChatProvider; label: string }[] = [
-  { id: "cursor", label: "Cursor" },
-  { id: "openai", label: "OpenAI" },
-  { id: "anthropic", label: "Anthropic" },
-  { id: "google", label: "Gemini" },
   { id: "mistral", label: "Mistral" },
   { id: "ollama", label: "Ollama" },
+  { id: "lmstudio", label: "LM Studio" },
 ];
 
-export const STT_PROVIDERS: { id: SttProvider; label: string }[] = [
-  { id: "grok", label: "Grok" },
-  { id: "openai", label: "ChatGPT" },
-  { id: "google", label: "Google" },
-  { id: "whisper", label: "Whisper (local)" },
-  { id: "mistral", label: "Mistral" },
+export const SPEECH_PROVIDERS: { id: SpeechProvider; label: string }[] = [
+  { id: "mistral", label: "Mistral (Voxtral)" },
+  { id: "browser", label: "This computer" },
 ];
 
-export const TTS_PROVIDERS: { id: TtsProvider; label: string }[] = [
-  { id: "grok", label: "Grok Voice" },
-  { id: "openai", label: "ChatGPT Voice" },
-  { id: "google", label: "Google Live" },
-  { id: "kokoro", label: "Kokoro (local)" },
-  { id: "mistral", label: "Mistral" },
-];
-
-export function isDuplexTalk(p: TtsProvider): boolean {
-  return p === "grok" || p === "openai" || p === "google";
-}
-
-export const SPEECH_PROVIDERS = STT_PROVIDERS;
-
-export const DEFAULT_CHAT_URL: Record<"ollama", string> = {
+export const DEFAULT_CHAT_URL: Record<ChatProvider, string> = {
+  mistral: "https://api.mistral.ai/v1",
   ollama: "http://127.0.0.1:11434/v1",
+  lmstudio: "http://127.0.0.1:1234/v1",
 };
 
-export const DEFAULT_WHISPER_URL = "http://127.0.0.1:9000/v1";
-export const DEFAULT_KOKORO_URL = "http://127.0.0.1:8880/v1";
-export const MISTRAL_API = "https://api.mistral.ai/v1";
-export const OPENAI_API = "https://api.openai.com/v1";
-export const ANTHROPIC_API = "https://api.anthropic.com/v1";
-export const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta";
+export function usesMistral(s: LMVoiceSettings): boolean {
+  return s.chatProvider === "mistral" || s.sttProvider === "mistral" || s.ttsProvider === "mistral";
+}
 
-export function openaiRoot(url: string): string {
+function openaiRoot(url: string): string {
   const u = url.trim().replace(/\/+$/, "");
   return /\/v1$/i.test(u) ? u : `${u}/v1`;
 }
 
-export function chatModels(provider: ChatProvider): VoiceOption[] {
-  if (provider === "cursor") return CURSOR_MODELS;
-  if (provider === "openai") return OPENAI_CHAT_MODELS;
-  if (provider === "anthropic") return ANTHROPIC_CHAT_MODELS;
-  if (provider === "google") return GEMINI_CHAT_MODELS;
-  if (provider === "mistral") return MISTRAL_CHAT_MODELS;
-  return [];
+export function chatRoot(s: LMVoiceSettings): string {
+  if (s.chatProvider === "ollama") return openaiRoot(s.ollamaUrl || DEFAULT_CHAT_URL.ollama);
+  if (s.chatProvider === "lmstudio") return openaiRoot(s.lmStudioUrl || DEFAULT_CHAT_URL.lmstudio);
+  return DEFAULT_CHAT_URL.mistral;
 }
 
-export function chatRoot(s: LMVoiceSettings): string {
-  if (s.chatProvider === "openai") return OPENAI_API;
-  if (s.chatProvider === "mistral") return MISTRAL_API;
-  if (s.chatProvider === "ollama") return openaiRoot(s.ollamaUrl || DEFAULT_CHAT_URL.ollama);
-  throw new Error("This chat provider does not use an OpenAI-compatible URL.");
+export function chatHeaders(s: LMVoiceSettings, mistralKey: string): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (s.chatProvider === "mistral") headers.Authorization = "Bearer " + mistralKey;
+  else if (s.chatProvider === "lmstudio") headers.Authorization = "Bearer lm-studio";
+  return headers;
 }
 
 export function defaultChatModel(provider: ChatProvider): string {
   if (provider === "ollama") return "llama3.2";
-  const first = chatModels(provider)[0];
-  return first?.id || "composer-2.5";
+  if (provider === "lmstudio") return "";
+  return "mistral-small-latest";
 }
 
 export async function listChatModels(s: LMVoiceSettings): Promise<string[]> {
-  const known = chatModels(s.chatProvider).map((m) => m.id);
-  if (s.chatProvider !== "ollama") return known;
   const res = await requestUrl({
     url: `${chatRoot(s)}/models`,
     method: "GET",
-    headers: { "Content-Type": "application/json" },
+    headers: chatHeaders(s, ""),
     throw: false,
   });
   if (res.status >= 300) throw new Error(`Models ${res.status}: ${(res.text || "").slice(0, 160)}`);

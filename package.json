@@ -1,7 +1,7 @@
 {
   "name": "vault-talk",
-	"version": "1.4.6",
-  "description": "Vault Talk — Jarvis in Obsidian. Speak or type with Grok Voice; optionally edit markdown notes.",
+  "version": "1.4.7",
+  "description": "Vault Talk — speak or type to your Obsidian vault with Mistral, Ollama, or LM Studio.",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -13,27 +13,19 @@
     "obsidian",
     "plugin",
     "vault-talk",
-    "grok",
+    "mistral",
     "voice",
     "tts"
   ],
   "author": "Jonas Wolber",
   "license": "MIT",
   "dependencies": {
-    "@bufbuild/protobuf": "1.10.0",
     "@codemirror/state": "6.5.0",
-    "@codemirror/view": "6.38.6",
-    "@connectrpc/connect": "1.6.1",
-    "@connectrpc/connect-node": "1.6.1",
-    "@connectrpc/connect-web": "1.6.1",
-    "@statsig/js-client": "3.31.0",
-    "zod": "3.25.76"
+    "@codemirror/view": "6.38.6"
   },
   "devDependencies": {
     "@types/node": "^22.15.17",
     "esbuild": "0.25.5",
-    "eslint": "^9.39.5",
-    "eslint-plugin-obsidianmd": "^0.4.2",
     "obsidian": "latest",
     "typescript": "^5.8.3"
   }

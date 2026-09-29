@@ -1,6 +1,6 @@
 {
   "name": "vault-talk",
-	"version": "1.4.5",
+	"version": "1.4.6",
   "description": "Vault Talk — Jarvis in Obsidian. Speak or type with Grok Voice; optionally edit markdown notes.",
   "main": "main.js",
   "type": "module",

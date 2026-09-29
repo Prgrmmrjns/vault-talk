@@ -260,6 +260,7 @@ export class JarvisPanel {
   }
 
   private line(kind: "you" | "bot" | "sys" | "err", text: string): HTMLElement {
+    if (kind !== "sys") this.rootEl?.addClass("has-talk");
     const el = this.logEl.createDiv({ cls: `vt-j-msg is-${kind}` });
     const body = el.createDiv({ cls: "vt-j-msg-text" });
     body.setText(text);
@@ -297,6 +298,7 @@ export class JarvisPanel {
     this.toolsList = null;
     this.toolsSum = null;
     this.toolsN = 0;
+    this.rootEl?.removeClass("has-talk");
     this.logEl.empty();
     this.line("sys", "Conversation cleared. Start voice again to talk.");
     void this.session?.stop();

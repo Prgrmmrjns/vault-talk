@@ -855,9 +855,7 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
   display: none;
 }
 .vt-jarvis.is-embed.is-open .vt-j-log,
-.vt-jarvis.is-embed:has(.vt-j-msg.is-you) .vt-j-log,
-.vt-jarvis.is-embed:has(.vt-j-msg.is-bot) .vt-j-log,
-.vt-jarvis.is-embed:has(.vt-j-msg.is-err) .vt-j-log {
+.vt-jarvis.is-embed.has-talk .vt-j-log {
   display: flex;
 }
 .vt-jarvis.is-embed.is-open .vt-j-msg.is-sys { display: block; }

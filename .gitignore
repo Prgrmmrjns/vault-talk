@@ -7,5 +7,6 @@ data.json
 .env
 .env.*
 .sdk-vendor/
+.sdk-cache/
 tools/
 .voice-logs/

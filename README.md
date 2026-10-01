@@ -40,6 +40,8 @@ npm install
 npm run build
 ```
 
+`main.js` does not include the Cursor SDK. Sending a Cursor chat calls `require("@cursor/sdk")` from `node_modules` next to the plugin. A community install does not ship that package.
+
 Symlink `main.js`, `manifest.json`, and `styles.css` into `.obsidian/plugins/vault-talk`.
 
 Releases are the plugin only: tag the plugin repo and GitHub attaches `main.js`, `manifest.json`, and `styles.css` for the [community listing](https://community.obsidian.md/plugins/vault-talk).

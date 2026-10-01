@@ -1249,7 +1249,7 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
   background: var(--d-field, var(--background-primary));
   padding: 2px 4px 2px 2px;
 }
-.vt-jarvis.is-column .vt-j-compose:has(.vt-j-file) { border-radius: 18px; }
+.vt-jarvis.is-column .vt-j-compose.has-file { border-radius: 18px; }
 .vt-jarvis.is-column .vt-j-input {
   flex: 1;
   min-width: 0;
@@ -1287,7 +1287,13 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 /* ---------- buttons ---------- */
 
 .desk .desk-btn {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1529,7 +1535,13 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
   box-shadow: var(--d-shadow);
 }
 .desk-goal-input {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   display: block;
   width: 100%;
   margin-top: 4px;
@@ -1726,11 +1738,17 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
   box-shadow: inset 3px 0 0 var(--d-warm), 0 0 0 3px color-mix(in srgb, var(--d-warm) 14%, transparent);
 }
 .desk-blk.is-done { opacity: 0.45; }
-.desk-blk.is-done .desk-blk-title { text-decoration: line-through; text-decoration-color: var(--d-mute); }
+.desk-blk.is-done .desk-blk-title { color: var(--d-mute); }
 .desk-blk.is-reminder { --c: var(--d-warm); }
 
 .desk-blk-check {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   flex: 0 0 auto;
   display: inline-flex;
   margin-top: 1px;
@@ -1865,7 +1883,7 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 }
 .desk-guide-day, .desk-guide-add { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
 .desk-guide-line { font-size: 13px; color: var(--d-mute); padding: 2px 0; }
-.desk-guide-line.is-done { text-decoration: line-through; opacity: 0.6; }
+.desk-guide-line.is-done { opacity: 0.6; }
 .desk-guide-times { display: flex; gap: 8px; }
 .desk-guide-times .desk-input { width: 7.5rem; flex: 0 0 auto; }
 .desk-guide-add .desk-input, .desk-pop .desk-textarea {
@@ -1894,7 +1912,13 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 }
 .desk-add:focus-within { border-color: color-mix(in srgb, var(--d-accent) 45%, transparent); }
 .desk .desk-input {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   flex: 1;
   min-width: 0;
   height: 32px;
@@ -1913,7 +1937,13 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
   border: 1px solid var(--d-line);
 }
 .desk-seg button {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   height: 24px;
   padding: 0 10px;
   border-radius: 999px;
@@ -1971,10 +2001,16 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 .desk-task:hover { background: var(--d-card-hi); }
 .desk-task.is-dragging { opacity: 0.4; }
 .desk-task.is-checking { opacity: 0; transform: translateX(8px); }
-.desk-task.is-checking .desk-task-text { text-decoration: line-through; }
+.desk-task.is-checking .desk-task-text { opacity: 0.55; }
 
 .desk-check {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   flex: 0 0 auto;
   width: 18px;
   height: 18px;
@@ -2061,7 +2097,13 @@ body.vt-dictate-fn .vt-dictate-fn-hud.is-on {
 .desk-field:focus-within { border-color: color-mix(in srgb, var(--d-warm) 45%, transparent); }
 .desk-field:focus-within .desk-label { color: var(--d-warm); }
 .desk .desk-textarea {
-  all: unset;
+  appearance: none;
+  background: none;
+  border: none;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
   display: block;
   width: 100%;
   margin-top: 6px;

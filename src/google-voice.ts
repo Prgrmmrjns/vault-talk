@@ -1,7 +1,7 @@
 import type { VaultAgent } from "./agent";
 import type { VoiceHandlers, VoicePhase } from "./grok-voice";
 import type { LMVoiceSettings } from "./settings";
-import { VoiceLogger, voiceSessionId } from "./voice-log";
+import { VoiceLogger, voiceSessionId, type LogSink } from "./voice-log";
 import {
   PcmPlayer,
   RATE_16K,
@@ -46,7 +46,7 @@ export class GoogleVoiceSession {
     private getKey: () => Promise<string>,
     private agent: VaultAgent,
     private settings: () => LMVoiceSettings,
-    private logDir: string,
+    private sink: LogSink,
     private handlers: VoiceHandlers
   ) {}
 
@@ -64,7 +64,7 @@ export class GoogleVoiceSession {
     }
     this.live = true;
     this.sessionId = voiceSessionId();
-    this.log = new VoiceLogger(this.sessionId, this.logDir);
+    this.log = new VoiceLogger(this.sessionId, this.sink);
     this.handlers.onSession(this.sessionId);
     this.setPhase("connecting");
     try {

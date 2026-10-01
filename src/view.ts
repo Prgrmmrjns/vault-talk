@@ -42,7 +42,7 @@ export class VoiceView extends ItemView {
   }
 
   getDisplayText() {
-    return "Vault Talk";
+    return "Vault talk";
   }
 
   getIcon() {
@@ -68,7 +68,7 @@ export class VoiceView extends ItemView {
     this.modeBtn = root.createEl("button", {
       cls: "lm-voice-mode",
       attr: { type: "button", "aria-pressed": "false" },
-      text: "Only Dictation",
+      text: "Only dictation",
     });
     this.modeBtn.addEventListener("click", () => void this.toggleDictation());
 

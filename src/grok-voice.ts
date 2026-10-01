@@ -2,7 +2,7 @@ import { requestUrl } from "obsidian";
 import type { VaultAgent } from "./agent";
 import { parseJson } from "./providers";
 import type { LMVoiceSettings } from "./settings";
-import { VoiceLogger, voiceSessionId } from "./voice-log";
+import { VoiceLogger, voiceSessionId, type LogSink } from "./voice-log";
 import { txt } from "./txt";
 import {
   PcmPlayer,
@@ -64,7 +64,7 @@ export class GrokVoiceSession {
     private getKey: () => Promise<string>,
     private agent: VaultAgent,
     private settings: () => LMVoiceSettings,
-    private logDir: string,
+    private sink: LogSink,
     private handlers: VoiceHandlers
   ) {}
 
@@ -82,7 +82,7 @@ export class GrokVoiceSession {
     }
     this.live = true;
     this.sessionId = voiceSessionId();
-    this.log = new VoiceLogger(this.sessionId, this.logDir);
+    this.log = new VoiceLogger(this.sessionId, this.sink);
     this.handlers.onSession(this.sessionId);
     this.setPhase("connecting");
     this.log.log("start", { url: WS_URL, target_rate: TARGET });

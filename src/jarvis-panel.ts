@@ -1,4 +1,4 @@
-import { App, FileSystemAdapter, FuzzySuggestModal, MarkdownRenderChild, Notice, setIcon, TFile, type EventRef } from "obsidian";
+import { App, FuzzySuggestModal, MarkdownRenderChild, Notice, setIcon, TFile, type EventRef } from "obsidian";
 import { VaultAgent } from "./agent";
 import { GrokVoiceSession, type VoiceHandlers, type VoicePhase } from "./grok-voice";
 import { GoogleVoiceSession } from "./google-voice";
@@ -17,6 +17,7 @@ import {
   type CursorModel,
   type ModelParam,
 } from "./cursor-models";
+import type { LogSink } from "./voice-log";
 import type LMVoicePlugin from "./main";
 import { hotkeyLabel, accentColor } from "./settings";
 
@@ -63,6 +64,7 @@ export class JarvisPanel {
   private filesEl!: HTMLElement;
   private files: TFile[] = [];
   private popEl: HTMLElement | null = null;
+  private popOff: (() => void) | null = null;
   private catalog: CursorModel[] = [];
 
   constructor(
@@ -269,7 +271,7 @@ export class JarvisPanel {
         void this.sendText();
       }
     });
-    this.srEl = row.createEl("span", { cls: "sr-only", attr: { role: "status" } });
+    this.srEl = row.createSpan({ cls: "sr-only", attr: { role: "status" } });
     this.paintSend();
     this.paintModel();
     void this.loadModels();
@@ -396,8 +398,7 @@ export class JarvisPanel {
       document.addEventListener("keydown", onKey);
       search.focus();
     }, 0);
-    pop.dataset.bound = "1";
-    (pop as HTMLElement & { _off?: () => void })._off = () => {
+    this.popOff = () => {
       document.removeEventListener("pointerdown", onDoc, true);
       document.removeEventListener("keydown", onKey);
     };
@@ -416,9 +417,9 @@ export class JarvisPanel {
   }
 
   private closeModels() {
-    const pop = this.popEl as (HTMLElement & { _off?: () => void }) | null;
-    pop?._off?.();
-    pop?.remove();
+    this.popOff?.();
+    this.popOff = null;
+    this.popEl?.remove();
     this.popEl = null;
   }
 
@@ -576,6 +577,7 @@ export class JarvisPanel {
   private paintFiles() {
     this.filesEl.empty();
     this.filesEl.toggle(this.files.length > 0);
+    this.filesEl.parentElement?.toggleClass("has-file", this.files.length > 0);
     for (const file of this.files) {
       const chip = this.filesEl.createSpan({ cls: "vt-j-file" });
       chip.createSpan({ text: file.basename });
@@ -666,12 +668,14 @@ export class JarvisPanel {
     void s?.pushContext?.();
   }
 
-  private logDir(): string {
-    const dir = this.plugin.manifest.dir || "";
+  private logSink(): LogSink {
+    const root = this.plugin.manifest.dir;
+    if (!root) return () => undefined;
+    const dir = `${root}/.voice-logs`;
     const ad = this.plugin.app.vault.adapter;
-    const base = ad instanceof FileSystemAdapter ? ad.getBasePath() : "";
-    if (base && dir) return `${base}/${dir}/.voice-logs`;
-    return `${dir}/.voice-logs`;
+    return (name, text) => {
+      void ad.mkdir(dir).then(() => ad.append(`${dir}/${name}`, text)).catch(() => undefined);
+    };
   }
 
   private handlers(): VoiceHandlers {
@@ -731,10 +735,10 @@ export class JarvisPanel {
         kind === "local"
           ? new LocalTalkSession(this.agent, () => this.plugin.settings, keys.xai, keys.mistral, keys.openai, keys.google, this.handlers())
           : kind === "openai"
-            ? new OpenaiVoiceSession(keys.openai, this.agent, () => this.plugin.settings, this.logDir(), this.handlers())
+            ? new OpenaiVoiceSession(keys.openai, this.agent, () => this.plugin.settings, this.logSink(), this.handlers())
             : kind === "google"
-              ? new GoogleVoiceSession(keys.google, this.agent, () => this.plugin.settings, this.logDir(), this.handlers())
-              : new GrokVoiceSession(keys.xai, this.agent, () => this.plugin.settings, this.logDir(), this.handlers());
+              ? new GoogleVoiceSession(keys.google, this.agent, () => this.plugin.settings, this.logSink(), this.handlers())
+              : new GrokVoiceSession(keys.xai, this.agent, () => this.plugin.settings, this.logSink(), this.handlers());
     }
     await this.session.start(mic);
   }

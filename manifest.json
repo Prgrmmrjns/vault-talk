@@ -1,9 +1,9 @@
 {
 	"id": "vault-talk",
 	"name": "Vault Talk",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"minAppVersion": "1.13.0",
-	"description": "First-class Cursor in Obsidian. The desk is today's note. Jarvis uses your Cursor models and writes the vault.",
+	"description": "First-class Cursor chat. The desk is today's note. Jarvis uses your Cursor models and can edit notes.",
 	"author": "Jonas Wolber",
 	"authorUrl": "https://github.com/Prgrmmrjns",
 	"isDesktopOnly": true

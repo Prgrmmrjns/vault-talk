@@ -1,7 +1,21 @@
-import { realpathSync } from "fs";
-import { dirname } from "path";
-import { Agent, Cursor, CursorAgentError, type ToolName } from "@cursor/sdk";
+import type { Agent, Cursor, CursorAgentError, ToolName } from "@cursor/sdk";
 import { App, FileSystemAdapter } from "obsidian";
+
+type CursorSdk = {
+  Agent: typeof Agent;
+  Cursor: typeof Cursor;
+  CursorAgentError: typeof CursorAgentError;
+};
+
+declare const require: (id: string) => CursorSdk;
+
+function loadSdk(): CursorSdk {
+  try {
+    return require("@cursor/sdk");
+  } catch {
+    throw new Error("Cursor chat needs @cursor/sdk installed next to this plugin.");
+  }
+}
 import { clampParams, FALLBACK_MODELS, findModel, paramList, type CursorModel } from "./cursor-models";
 import type { LMVoiceSettings } from "./settings";
 
@@ -22,7 +36,7 @@ let catalogCache: { at: number; models: CursorModel[] } | null = null;
 export async function cursorCatalog(apiKey: string): Promise<CursorModel[]> {
   if (catalogCache && Date.now() - catalogCache.at < 5 * 60_000) return catalogCache.models;
   try {
-    const rows = await Cursor.models.list({ apiKey });
+    const rows = await loadSdk().Cursor.models.list({ apiKey });
     const models: CursorModel[] = rows
       .filter((m) => m.id)
       .map((m) => ({
@@ -58,14 +72,6 @@ function toolOpts(s: LMVoiceSettings): { tools?: ToolName[]; disallowedTools?: T
     return { tools, disallowedTools: ["delete"] };
   }
   return { disallowedTools: deny };
-}
-
-function hintArgv(): string | undefined {
-  try {
-    return typeof __filename === "string" ? realpathSync(__filename) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 type ToolFn = (name: string, detail: string) => void;
@@ -118,7 +124,8 @@ export class CursorVaultChat {
       }
       return (result.result || "").trim();
     } catch (err) {
-      if (err instanceof CursorAgentError) {
+      const SdkError = loadSdk().CursorAgentError;
+      if (err instanceof SdkError) {
         throw new Error(err.message || "Cursor could not start.");
       }
       throw err;
@@ -126,22 +133,13 @@ export class CursorVaultChat {
   }
 
   private async create(s: LMVoiceSettings) {
-    const hint = hintArgv();
-    const prev = process.argv[1];
-    if (hint) process.argv[1] = hint;
-    try {
-      const key = await this.apiKey();
-      const model = cursorSelection(s, await cursorCatalog(key));
-      return await Agent.create({
-        apiKey: key,
-        model,
-        local: { cwd: workspace(this.app, s.notesFolder) },
-        ...toolOpts(s),
-      });
-    } finally {
-      if (hint) process.argv[1] = prev ?? "";
-    }
+    const key = await this.apiKey();
+    const model = cursorSelection(s, await cursorCatalog(key));
+    return await loadSdk().Agent.create({
+      apiKey: key,
+      model,
+      local: { cwd: workspace(this.app, s.notesFolder) },
+      ...toolOpts(s),
+    });
   }
 }
-
-void dirname;

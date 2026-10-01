@@ -248,7 +248,7 @@ function jarvisRail(parent, actions) {
 }
 
 function placeJarvis(view, onDesk) {
-  const show = !!onDesk && view.app.workspace.activeLeaf?.view === view;
+  const show = !!onDesk && view.app.workspace.getLeaf(false).view === view;
   view.contentEl.toggleClass("is-jarvis-sidebar", !show);
   view.railEl?.toggle(show);
   if (!view.jarvisHost) return;
@@ -1324,7 +1324,7 @@ export class Desk {
       const lines = src.split("\n");
       const i = this.lineIndex(lines, line, raw);
       let next = null;
-      try { next = api?.executeToggleTaskDoneCommand?.(lines[i], file.path) || null; } catch (_) { next = null; }
+      try { next = api?.executeToggleTaskDoneCommand?.(lines[i], file.path) || null; } catch { next = null; }
       if (!next) {
         next = /\[[xX]\]/.test(lines[i])
           ? lines[i].replace(/\[[xX]\]/, "[ ]").replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/u, "")
@@ -1627,7 +1627,7 @@ export class Desk {
     const day = M().format(ISO);
     if (this.firedDay !== day) { this.fired = new Set(); this.firedDay = day; }
     if (!this.latest || this.latest.today !== day || Date.now() - (this.latestAt || 0) > 5 * 60e3) {
-      try { await this.collect(); } catch (_) { return; }
+      try { await this.collect(); } catch { return; }
     }
     const d = this.latest, n = nowMin(), lead = this.settings.remindLead;
     const items = [...d.daily.blocks, ...d.events.filter((e) => !e.allDay)].filter((x) => !x.done);
@@ -1652,12 +1652,12 @@ export class Desk {
 
   notify(title, body) {
     const n = new Notice(`${title} — ${body}`, 12000);
-    n.noticeEl?.addEventListener("click", () => { void this.openDesk(); });
+    n.messageEl.addEventListener("click", () => { void this.openDesk(); });
     try {
       if (!window.Notification) return;
       if (Notification.permission === "granted") new Notification(title, { body });
       else if (Notification.permission === "default") void Notification.requestPermission();
-    } catch (_) { /* no system notifications */ }
+    } catch { /* no system notifications */ }
   }
 
   /* ---------- Jarvis ---------- */
@@ -1690,7 +1690,7 @@ export class Desk {
 
   async ask(display, instruction) {
     const vt = this.jarvis();
-    if (!vt?.askJarvis) { new Notice("Enable Vault Talk to use Jarvis."); return; }
+    if (!vt?.askJarvis) { new Notice("Enable vault talk to use jarvis."); return; }
     const ctx = await this.context();
     await vt.askJarvis(display, `${ctx}\n\n${instruction}`);
   }
@@ -1734,7 +1734,7 @@ function renderDeskSettings(el, plugin) {
     const text = (name, desc, key, parse = (v) => v) => new Setting(el).setName(name).setDesc(desc).addText((t) => t.setValue(String(s[key])).onChange(async (v) => { s[key] = parse(v); await plugin.saveSettings(); }));
     const num = (v) => Math.max(0, Math.min(23, parseInt(v, 10) || 0));
     text("Name", "Used in the greeting.", "name");
-    new Setting(el).setName("Calendars (iCal)").setDesc("Secret iCal / webcal addresses, one per line. Google Calendar → Settings → your calendar → Secret address in iCal format.")
+    new Setting(el).setName("Calendars (ical)").setDesc("Secret ical / webcal addresses, one per line. Google calendar → settings → your calendar → secret address in ical format.")
       .addTextArea((t) => { t.setValue(s.icsUrls).onChange(async (v) => { s.icsUrls = v; await plugin.saveSettings(); }); t.inputEl.rows = 3; t.inputEl.setCssProps({ width: "100%" }); });
     text("Day starts", "Hour (0–23).", "startHour", num);
     text("Day ends", "Hour (0–23).", "endHour", num);

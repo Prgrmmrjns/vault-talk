@@ -1,7 +1,7 @@
 {
   "name": "vault-talk",
-	"version": "1.5.0",
-  "description": "First-class Cursor in Obsidian. The desk is today's note. Jarvis uses your Cursor models and writes the vault.",
+  "version": "1.5.1",
+  "description": "First-class Cursor chat. The desk is today's note. Jarvis uses your Cursor models and can edit notes.",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -19,16 +19,6 @@
   ],
   "author": "Jonas Wolber",
   "license": "MIT",
-  "dependencies": {
-    "@bufbuild/protobuf": "1.10.0",
-    "@codemirror/state": "6.5.0",
-    "@codemirror/view": "6.38.6",
-    "@connectrpc/connect": "1.6.1",
-    "@connectrpc/connect-node": "1.6.1",
-    "@connectrpc/connect-web": "1.6.1",
-    "@statsig/js-client": "3.31.0",
-    "zod": "3.25.76"
-  },
   "devDependencies": {
     "@types/node": "^22.15.17",
     "esbuild": "0.25.5",

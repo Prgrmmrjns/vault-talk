@@ -480,7 +480,7 @@ export class LMVoiceSettingTab extends PluginSettingTab {
               const cur = this.plugin.settings;
               setting.addText((t) => {
                 t.inputEl.type = "password";
-                t.setPlaceholder("cursor_…");
+                t.setPlaceholder("Cursor_…");
                 t.setValue(cur.cursorApiKey).onChange((v) => save(() => (cur.cursorApiKey = v.trim())));
               });
             },

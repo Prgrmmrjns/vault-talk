@@ -108,8 +108,7 @@ export class VaultAgent {
   }
 
   rememberFocus() {
-    const leaf = this.app.workspace.activeLeaf;
-    const view = leaf?.view;
+    const view = this.app.workspace.getLeaf(false).view;
     if (!view) return;
     const kind = view.getViewType();
     if (kind.startsWith("vault-talk")) return;

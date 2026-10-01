@@ -1,6 +1,6 @@
-import { mkdirSync, appendFileSync } from "fs";
-import { join } from "path";
 import { txt } from "./txt";
+
+export type LogSink = (name: string, text: string) => void;
 
 const ID_OK = /^[a-z0-9]{4,64}$/;
 const AUDIO_TYPES = new Set([
@@ -32,11 +32,7 @@ function redact(v: unknown, depth = 0): unknown {
   const out: Record<string, unknown> = {};
   for (const [k, val] of Object.entries(o)) {
     if ((k === "delta" || k === "audio") && typeof val === "string") {
-      try {
-        out.bytes = atob(val).length;
-      } catch {
-        out.bytes = val.length;
-      }
+      out.bytes = val.length;
       continue;
     }
     out[k] = redact(val, depth + 1);
@@ -52,7 +48,7 @@ export class VoiceLogger {
 
   constructor(
     private sessionId: string,
-    private dir: string
+    private sink: LogSink
   ) {}
 
   log(kind: string, data: Record<string, unknown> = {}) {
@@ -86,8 +82,7 @@ export class VoiceLogger {
     const rows = this.buf.splice(0, 500).filter((e) => JSON.stringify(e).length < 16000);
     if (!rows.length) return;
     try {
-      mkdirSync(this.dir, { recursive: true });
-      appendFileSync(join(this.dir, `${this.sessionId}.ndjson`), rows.map((e) => JSON.stringify(e)).join("\n") + "\n");
+      this.sink(`${this.sessionId}.ndjson`, rows.map((e) => JSON.stringify(e)).join("\n") + "\n");
     } catch {
       /* logging never throws into the voice path */
     }

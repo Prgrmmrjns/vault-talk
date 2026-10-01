@@ -21,10 +21,10 @@ export default class LMVoicePlugin extends Plugin {
     this.dictate = new EditorDictate(this);
     this.registerView(DICTATE_VIEW, (leaf) => new DictateView(leaf, this));
     this.addRibbonIcon("audio-lines", "Jarvis", () => void this.activateDictate());
-    this.addCommand({ id: "open-dictate", name: "Open Jarvis", callback: () => void this.activateDictate() });
+    this.addCommand({ id: "open-dictate", name: "Open jarvis", callback: () => void this.activateDictate() });
     this.addCommand({
       id: "toggle-dictate",
-      name: "Chat with Jarvis",
+      name: "Chat with jarvis",
       callback: () => void this.openChat(),
     });
     this.addCommand({
@@ -161,8 +161,7 @@ export default class LMVoicePlugin extends Plugin {
       await this.closeSide();
       if (!this.desk.onDesk()) await this.desk.openDesk();
       this.desk.placeJarvis();
-      const leaf = this.app.workspace.activeLeaf;
-      const type = leaf?.view?.getViewType?.();
+      const type = this.app.workspace.getLeaf(false).view?.getViewType?.();
       if (type !== "desk-view" && type !== "project-overview") {
         await this.desk.openDesk();
         this.desk.placeJarvis();
@@ -183,7 +182,7 @@ export default class LMVoicePlugin extends Plugin {
     if (this.dictate.listening) this.dictate.cancel();
     if (this.jarvisOnDesk()) {
       await this.closeSide();
-      const type = this.app.workspace.activeLeaf?.view?.getViewType?.();
+      const type = this.app.workspace.getLeaf(false).view?.getViewType?.();
       if (type !== "desk-view" && type !== "project-overview") await this.desk.openDesk();
       this.desk.placeJarvis();
       this.embedPanel?.showLog();
@@ -204,7 +203,7 @@ export default class LMVoicePlugin extends Plugin {
   async activateDictate(focus = true) {
     if (this.jarvisOnDesk()) {
       await this.closeSide();
-      const type = this.app.workspace.activeLeaf?.view?.getViewType?.();
+      const type = this.app.workspace.getLeaf(false).view?.getViewType?.();
       if (type !== "desk-view" && type !== "project-overview") await this.desk.openDesk();
       this.desk.placeJarvis();
       this.embedPanel?.showLog();
